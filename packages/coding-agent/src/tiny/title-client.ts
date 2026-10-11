@@ -69,22 +69,9 @@ const SHUTDOWN_WAIT_MS = 5_000;
 type WorkerHandle = RefCountedWorkerHandle<TinyWorkerRequest, TinyWorkerResponse>;
 
 type PendingRequest =
-	| {
-			kind: "title";
-			modelKey: TinyLocalModelKey;
-			source: string;
-			resolve: (title: string | null) => void;
-	  }
-	| {
-			kind: "chat";
-			modelKey: TinyLocalModelKey;
-			resolve: (text: string | null) => void;
-	  }
-	| {
-			kind: "load";
-			modelKey: TinyLocalModelKey;
-			resolve: (result: TinyTitleDownloadResult) => void;
-	  };
+	| { kind: "title"; modelKey: TinyLocalModelKey; source: string; resolve: (title: string | null) => void }
+	| { kind: "chat"; modelKey: TinyLocalModelKey; resolve: (text: string | null) => void }
+	| { kind: "load"; modelKey: TinyLocalModelKey; resolve: (result: TinyTitleDownloadResult) => void };
 
 export interface TinyTitleDownloadResult {
 	ok: boolean;
@@ -328,10 +315,7 @@ async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResu
 		socket.on("data", onData);
 		socket.once("close", () => pong.resolve(null));
 		const timer = setTimeout(() => pong.resolve(null), PROBE_TIMEOUT_MS);
-		writeJsonLine(socket, {
-			type: "ping",
-			id: "probe",
-		} satisfies TinyWorkerRequest);
+		writeJsonLine(socket, { type: "ping", id: "probe" } satisfies TinyWorkerRequest);
 		const reply = await pong.promise;
 		clearTimeout(timer);
 		socket.off("data", onData);
@@ -342,10 +326,7 @@ async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResu
 				running: reply.tag,
 				expected: tag,
 			});
-			writeJsonLine(socket, {
-				type: "shutdown",
-				id: "replace",
-			} satisfies TinyWorkerRequest);
+			writeJsonLine(socket, { type: "shutdown", id: "replace" } satisfies TinyWorkerRequest);
 			socket.destroy();
 			return { kind: "stale" };
 		}
@@ -422,11 +403,7 @@ function mlxLaunch(modelKey: TinyLocalModelKey, emitProgress: (event: TinyTitleP
 		tag,
 		async spawn(endpoint, logPath) {
 			const python = await ensureTinyMlxRuntime(phase =>
-				emitProgress({
-					modelKey,
-					status: phase,
-					name: `mlx-lm@${MLX_LM_VERSION}`,
-				}),
+				emitProgress({ modelKey, status: phase, name: `mlx-lm@${MLX_LM_VERSION}` }),
 			);
 			const script = await stageRunnerScript("omp-tiny-mlx", "py", MLX_SERVER_SCRIPT);
 			const env = inferenceWorkerEnv({
@@ -534,10 +511,7 @@ export async function connectTinyWorker(
 
 function buildTitleMessages(message: string, systemPrompt?: string): TinyChatMessage[] {
 	return [
-		{
-			role: "system",
-			content: systemPrompt?.trim() || TINY_TITLE_SYSTEM_PROMPT,
-		},
+		{ role: "system", content: systemPrompt?.trim() || TINY_TITLE_SYSTEM_PROMPT },
 		{ role: "user", content: formatTitleUserMessage(message) },
 	];
 }
@@ -622,10 +596,7 @@ export class TinyTitleClient {
 	prewarm(modelKey: string): void {
 		if (!isTinyLocalModelKey(modelKey) || this.#hasFailed(modelKey)) return;
 		try {
-			this.#ensureWorker(modelKey).handle.send({
-				type: "ping",
-				id: String(++this.#nextRequestId),
-			});
+			this.#ensureWorker(modelKey).handle.send({ type: "ping", id: String(++this.#nextRequestId) });
 		} catch (error) {
 			logger.debug("tiny-title: prewarm failed", {
 				modelKey,
@@ -690,10 +661,7 @@ export class TinyTitleClient {
 		const unsubscribe = options.onProgress ? this.onProgress(options.onProgress) : undefined;
 		try {
 			const { promise, resolve } = Promise.withResolvers<TinyTitleDownloadResult>();
-			const request: TinyWorkerRequest = {
-				type: "load",
-				id: String(++this.#nextRequestId),
-			};
+			const request: TinyWorkerRequest = { type: "load", id: String(++this.#nextRequestId) };
 			return await this.#run(request, { kind: "load", modelKey, resolve }, promise, options.signal, () =>
 				resolve({ ok: false }),
 			);
@@ -813,10 +781,7 @@ export class TinyTitleClient {
 		this.#pending.delete(message.id);
 		this.#syncWorkerRef(modelKey);
 		if (message.type === "error") {
-			logger.debug("tiny-title: worker returned error", {
-				modelKey,
-				error: message.error,
-			});
+			logger.debug("tiny-title: worker returned error", { modelKey, error: message.error });
 			this.#markFailedModel(pending);
 			this.#fail(pending, message.error);
 			// One worker serves one model: a failed load/generation leaves nothing
@@ -884,11 +849,7 @@ export class TinyTitleClient {
 		if (failed === 0 && error.message.startsWith(TINY_WORKER_CLOSED)) {
 			logger.debug("tiny-title: worker went away while idle", { modelKey });
 		} else {
-			logger.warn("tiny-title: worker error", {
-				modelKey,
-				error: error.message,
-				failedRequests: failed,
-			});
+			logger.warn("tiny-title: worker error", { modelKey, error: error.message, failedRequests: failed });
 		}
 	}
 }
@@ -909,10 +870,7 @@ export async function smokeTestTinyTitleWorker({
 }: {
 	timeoutMs?: number;
 } = {}): Promise<void> {
-	await fs.promises.mkdir(getTinyWorkerRuntimeDir(), {
-		recursive: true,
-		mode: 0o700,
-	});
+	await fs.promises.mkdir(getTinyWorkerRuntimeDir(), { recursive: true, mode: 0o700 });
 	const dir = await fs.promises.mkdtemp(path.join(getTinyWorkerRuntimeDir(), "smoke-"));
 	const modelKey: TinyLocalModelKey = "lfm2.5-230m";
 	const launch = onnxLaunch(modelKey, {});

@@ -135,9 +135,7 @@ function fitPromptToPositionTable(generator: TextGenerationPipeline, promptText:
 	const maxPositions = generator.model.config.max_position_embeddings;
 	if (typeof maxPositions !== "number") return promptText;
 	const limit = onnxSafePromptTokens(maxPositions, maxNewTokens);
-	const ids = generator.tokenizer.encode(promptText, {
-		add_special_tokens: false,
-	});
+	const ids = generator.tokenizer.encode(promptText, { add_special_tokens: false });
 	const tail = tailTokenIds(ids, limit);
 	if (tail.length === ids.length) return promptText;
 	logger.warn("tiny-model: prompt exceeds ONNX position table; keeping the tail", {
@@ -145,10 +143,7 @@ function fitPromptToPositionTable(generator: TextGenerationPipeline, promptText:
 		limit,
 		maxPositionEmbeddings: maxPositions,
 	});
-	return generator.tokenizer.decode(tail, {
-		skip_special_tokens: false,
-		clean_up_tokenization_spaces: false,
-	});
+	return generator.tokenizer.decode(tail, { skip_special_tokens: false, clean_up_tokenization_spaces: false });
 }
 
 /** The worker's single ONNX model: transformers.js pipeline with the device fallback chain. */
@@ -254,12 +249,7 @@ class OnnxModel {
 		reply.send({
 			type: "progress",
 			id: requestId,
-			event: {
-				modelKey: this.#modelKey,
-				status: "ready",
-				task: "text-generation",
-				model: this.#spec.repo,
-			},
+			event: { modelKey: this.#modelKey, status: "ready", task: "text-generation", model: this.#spec.repo },
 		});
 	}
 

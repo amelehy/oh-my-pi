@@ -4,7 +4,7 @@
  * above it; replies that hand off to tool calls, and turns with no prose, keep
  * the plain transcript presentation.
  */
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent, markFinalAnswer } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import {
@@ -12,6 +12,7 @@ import {
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 
 function reply(stopReason: AssistantMessage["stopReason"], content: AssistantMessage["content"]): AssistantMessage {
@@ -51,6 +52,7 @@ describe("final answer frame", () => {
 	});
 	afterEach(() => {
 		setChatTranscriptDisplayPreferences({ answerFrame: initial });
+		vi.restoreAllMocks();
 	});
 
 	it("boxes the turn-ending reply under an Answer title carrying the turn's totals", () => {
@@ -111,5 +113,28 @@ describe("final answer frame", () => {
 		expect(rows[0]).not.toStartWith(theme.boxRound.topLeft);
 		expect(rows.some(row => row.includes("Long reply."))).toBe(true);
 		expect(rows.at(-1)).toContain("Answer ↑");
+	});
+
+	it("keeps image rows out of the box: a reply holding them takes the closing rule", () => {
+		setChatTranscriptDisplayPreferences({ answerFrame: true });
+		// Stand in for a terminal image row (picture, figure, or chart) so the test runs on any terminal.
+		vi.spyOn(TERMINAL, "isImageLine").mockImplementation(line => line.includes("IMAGE-ROW"));
+		const rows = finish(reply("stop", [{ type: "text", text: "Here is the chart.\n\nIMAGE-ROW" }]));
+		expect(rows[0]).not.toStartWith(theme.boxRound.topLeft);
+		const imageRow = rows.find(row => row.includes("IMAGE-ROW"))!;
+		expect(imageRow).not.toContain(theme.boxRound.vertical);
+		expect(rows.at(-1)).toContain("Answer ↑");
+	});
+
+	it("keeps the style a reused answer was first given when a rebuild marks it again", () => {
+		setChatTranscriptDisplayPreferences({ answerFrame: true });
+		const message = reply("stop", [{ type: "text", text: "Reused." }]);
+		const component = new AssistantMessageComponent(message);
+		component.setFinalAnswer("rule");
+		const container = new TranscriptContainer();
+		container.addChild(component);
+		// The container would allow a frame here; a reused block keeps its earlier decision.
+		markFinalAnswer(container, component, message);
+		expect(component.finalAnswer).toBe("rule");
 	});
 });

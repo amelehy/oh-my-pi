@@ -105,7 +105,7 @@ Finished agents stay listed with their outcome while their wave — siblings fro
 
 The tree stays short: collapsed (`display.pinnedAgents: collapsed`, the default) it shows a few agents — running ones first, each with the agents above it, then failures — plus an expander naming what it hides; `full` lists every agent, and `off` hides the block. Clicking the expander toggles between the two while `tui.mouse` is on.
 
-Enable `tui.mouse` to click live subagent cards and jump-list rows directly in the main session, without opening the Hub first. A click focuses that card's most recent agent (a jump-list row focuses its exact agent); focusing a parked agent revives it. Hovering a live target lights it up first, so you can see what a click will open.
+Enable `tui.mouse` to click live subagent cards and agent-tree rows directly in the main session, without opening the Hub first. A click focuses that card's most recent agent (a tree row focuses its exact agent); focusing a parked agent revives it. Hovering a live target lights it up first, so you can see what a click will open.
 
 Only rows currently in the live viewport are clickable — retired transcript rows live in terminal scrollback, where clicks cannot map back to content. Enabling capture changes terminal gestures while on: text selection becomes Shift+drag and wheel scroll becomes Shift+wheel. Off by default.
 

@@ -53,14 +53,15 @@ export type FinalAnswerStyle = "frame" | "rule";
  * `display.answerFrame` is on. The reply is boxed while none of its rows have
  * reached terminal scrollback; a long reply whose head already scrolled out
  * gets a closing rule instead, since emitted rows can never be repainted.
- * Shared by the live `message_end` path and transcript rebuilds.
+ * Shared by the live `message_end` path and transcript rebuilds; a component
+ * already marked (one a rebuild reuses) keeps the style it was given.
  */
 export function markFinalAnswer(
 	container: TranscriptContainer,
 	component: AssistantMessageComponent,
 	message: AssistantMessage,
 ): void {
-	if (!chatTranscriptDisplayPreferences.answerFrame) return;
+	if (!chatTranscriptDisplayPreferences.answerFrame || component.finalAnswer !== undefined) return;
 	if (message.stopReason !== "stop" && message.stopReason !== "length") return;
 	component.setFinalAnswer(container.resetBlockStableRows(component) ? "frame" : "rule");
 }
@@ -599,6 +600,11 @@ export class AssistantMessageComponent extends Container {
 		this.#blockVersion++;
 	}
 
+	/** How this answer is set apart as its turn's final message, if at all. */
+	get finalAnswer(): FinalAnswerStyle | undefined {
+		return this.#finalAnswer;
+	}
+
 	/**
 	 * Show or clear the trailing served-model divider. Set once the turn's
 	 * signed thinking block (or router report) has named the model that actually
@@ -817,10 +823,13 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		const style = this.#emergencyText ? this.#finalAnswer : undefined;
-		if (style === "frame") return this.#renderAnswerFrame(width);
+		if (style === "frame") {
+			const framed = this.#renderAnswerFrame(width);
+			if (framed) return framed;
+		}
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
-		if (style === "rule") return [...rows, this.#renderAnswerRule(width)];
+		if (style) return [...rows, this.#renderAnswerRule(width)];
 		return rows;
 	}
 
@@ -834,11 +843,15 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * The reply inside an accent box titled with {@link #answerTitle}, filled
 	 * with `customMessageBg` so it reads lighter than the terminal, the prompt
-	 * band, and tool output; trailing markers stay below it.
+	 * band, and tool output; trailing markers stay below it. Undefined when the
+	 * reply holds image rows (pictures, figures, charts): those must reach the
+	 * terminal raw, without a border, padding, or fill, so the reply takes the
+	 * closing rule instead.
 	 */
-	#renderAnswerFrame(width: number): readonly string[] {
+	#renderAnswerFrame(width: number): readonly string[] | undefined {
 		// Prose children carry their own one-column side padding, so the frame adds none.
 		const content = trimBlankEdges(this.#contentContainer.render(Math.max(1, width - 2)));
+		if (content.some(row => TERMINAL.isImageLine(row))) return undefined;
 		const { label, meta } = this.#answerTitle();
 		const framed = this.#answerBlock.render(
 			{

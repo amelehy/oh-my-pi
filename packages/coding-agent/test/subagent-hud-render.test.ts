@@ -853,7 +853,10 @@ describe("subagent HUD lines", () => {
 	describe("repaint tick", () => {
 		it("animates while an agent runs and stops when paused or nothing runs", () => {
 			const running = [makeSession({ id: "Live" })];
-			expect(buildSubagentHudView(running, { columns: 120 })?.tickMs).toBe(SPINNER_ADVANCE_MS);
+			// The next repaint lands on the shared spinner clock's next step, at most one step away.
+			const now = vi.spyOn(performance, "now").mockReturnValue(10 * SPINNER_ADVANCE_MS + 30);
+			expect(buildSubagentHudView(running, { columns: 120 })?.tickMs).toBe(SPINNER_ADVANCE_MS - 30);
+			now.mockRestore();
 			expect(buildSubagentHudView(running, { columns: 120, animate: false })?.tickMs).toBeUndefined();
 			expect(
 				buildSubagentHudView([makeSession({ id: "Done", status: "completed" })], { columns: 120 }),
@@ -1068,6 +1071,10 @@ describe("InteractiveMode subagent observer UI sync", () => {
 
 		vi.advanceTimersByTime(1_000);
 		expect(mode.subagentContainer.children[0]).toBe(hud);
-		expect(hudText()).toContain("bash: sleep 40 · 21.1s");
+		// The repaint tick follows the shared spinner clock, so the last repaint lands
+		// within one spinner step of the advanced time: the marker moved forward by ~1s.
+		const elapsed = Number(/bash: sleep 40 · (\d+\.\d)s/.exec(hudText())?.[1]);
+		expect(elapsed).toBeGreaterThanOrEqual(21);
+		expect(elapsed).toBeLessThanOrEqual(21.1);
 	});
 });

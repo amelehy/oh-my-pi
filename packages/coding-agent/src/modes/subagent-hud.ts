@@ -35,7 +35,7 @@ import {
 import { getTreeBranch, getTreeContinuePrefix } from "@oh-my-pi/pi-tui/render/utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { agentTypeBadge, assignmentGist, formatTaskId } from "@oh-my-pi/pi-tui/tools/task";
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { labelEchoesHandle } from "../task/label";
 
 /** Agent rows a collapsed tree shows before the expander (running agents and their spawners first). */
@@ -314,7 +314,8 @@ function renderActivityRow(session: ObservableSession, prefix: string, width: nu
 	if (progress.retryState) {
 		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - now);
 		const when = remainingMs > 0 ? `in ${formatElapsed(remainingMs)}` : "now";
-		const summary = `retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${when}: ${singleLine(progress.retryState.errorMessage)}`;
+		// Provider error bodies can carry ANSI and control bytes; strip them before they reach the pinned chrome.
+		const summary = `retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${when}: ${singleLine(sanitizeText(progress.retryState.errorMessage))}`;
 		return `${prefix}${truncateToWidth(`${hook}${theme.fg("warning", summary)}`, rowWidth)}`;
 	}
 	const currentTool = progress.currentTool;
@@ -462,8 +463,13 @@ export function buildSubagentHudView(
 		lines.push(truncateToWidth(`${outerIndent}${theme.fg("dim", "… show less")}`, width, ""));
 	}
 
+	// Wake on the shared spinner clock's next step, so the tree repaints in the
+	// same beat as live task cards instead of on a drifting timer of its own.
 	const animate = options.animate ?? true;
-	const tickMs = animate && all.some(node => node.status === "running") ? SPINNER_ADVANCE_MS : undefined;
+	const tickMs =
+		animate && all.some(node => node.status === "running")
+			? Math.ceil(SPINNER_ADVANCE_MS - (performance.now() % SPINNER_ADVANCE_MS))
+			: undefined;
 	return { lines, order, toggleRow, tickMs };
 }
 

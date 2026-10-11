@@ -6,6 +6,11 @@
 
 - Added opt-in JSON editing for free-form array settings, with credential settings kept masked in rows and editors ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 
+### Changed
+
+- Agent Hub opens on the agent tree (subagents nested under their spawner) instead of the flat roster; `t` still flips between them, and the view tabs read `Tree / Flat`. Tree rows in the native picker now carry the same time, spend, request, tool, and token columns as the flat roster
+- Live task cards preview an unlabeled subagent by what its assignment asks for (the `# Change`/`# Goal` section's first line) instead of the task template's scaffolding such as `# Target None.`
+
 ### Fixed
 
 - Native settings editors now display submission and validation errors instead of silently keeping the editor open ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).

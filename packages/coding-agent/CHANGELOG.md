@@ -7,6 +7,11 @@
 - Added `ctx.annotations` so extensions can submit or collect `/annotate` feedback on text and diffs ([#15260](https://github.com/can1357/oh-my-pi/pull/15260) by [@Shadorain](https://github.com/Shadorain)).
 - Added **Extra Context Files** to `/settings` → **Context** so custom instruction filenames can be configured without editing YAML ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 
+### Changed
+
+- The pinned `Subagents` jump list is now a live agent tree: subagents nest under the agent that spawned them, each row shows an animated status (running, done, failed, aborted), what the agent is doing right now, and its active time and spend, and the header counts each outcome with the wave's total spend and the Agent Hub key. Finished agents stay listed with their outcome while the rest of their wave runs; collapsed, the tree keeps running agents (and the agents above them) and failures first, and the expander names what it hides
+- `display.subagentLivePreview` (the per-agent activity row) is now on by default
+
 ## [18.8.9] - 2026-10-10
 
 ### Added

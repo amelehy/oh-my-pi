@@ -1,4 +1,4 @@
-import { SubagentHudComponent } from "../src/modes/interactive-mode";
+import { SubagentHudComponent } from "../src/modes/subagent-hud";
 
 const WARMUP_PAINTS = 1_000;
 const MEASURED_PAINTS = 3_000;

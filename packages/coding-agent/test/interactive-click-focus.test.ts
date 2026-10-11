@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { SUBAGENT_HUD_COLLAPSED_LIMIT } from "@oh-my-pi/pi-coding-agent/modes/subagent-hud";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -233,7 +234,7 @@ describe("inline click-to-focus geometry", () => {
 		void mode.getUserInput();
 		await term.waitForRender();
 
-		for (let index = 0; index < 5; index++) {
+		for (let index = 0; index < SUBAGENT_HUD_COLLAPSED_LIMIT + 2; index++) {
 			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 				id: `ToggleAgent${index}`,
 				index,
@@ -253,17 +254,19 @@ describe("inline click-to-focus geometry", () => {
 			term.sendInput(`\x1b[<0;5;${screenRow + 1}M`);
 		};
 
-		// Collapsed by default: three rows plus the expander.
-		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("more — expand")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
+		const hidden = `ToggleAgent${SUBAGENT_HUD_COLLAPSED_LIMIT}`;
+		const last = `ToggleAgent${SUBAGENT_HUD_COLLAPSED_LIMIT + 1}`;
+		// Collapsed by default: a few rows plus the expander.
+		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("— expand")));
+		expect(plainRows(term.getViewport()).some(row => row.includes(hidden))).toBe(false);
 
 		// Clicking the expander paints the slotted window with a collapse row.
-		await clickRow("more — expand");
+		await clickRow("— expand");
 		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("show less")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent4"))).toBe(true);
+		expect(plainRows(term.getViewport()).some(row => row.includes(last))).toBe(true);
 		// Clicking it again collapses back to a few rows.
 		await clickRow("show less");
-		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("more — expand")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
+		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("— expand")));
+		expect(plainRows(term.getViewport()).some(row => row.includes(hidden))).toBe(false);
 	});
 });

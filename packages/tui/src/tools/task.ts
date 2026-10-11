@@ -288,6 +288,39 @@ export function formatTaskId(id: string): string {
 	return segments.length < 2 ? sanitizedId : segments.join(">");
 }
 
+/** Lines that frame an assignment rather than say what it is: empty placeholders and bare list markers. */
+const ASSIGNMENT_PLACEHOLDER_LINE = /^((none|n\/a|-|tbd)\.?|[-*+]|\d+[.)])$/i;
+const ASSIGNMENT_HEADING = /^#{1,6}(?:\s+(.*))?$/;
+/** Template sections that say what to do, preferred over scope sections like `# Target`. */
+const ASSIGNMENT_ACTION_SECTION = /^(change|task|goal|objective|assignment|ask)\b/i;
+const ASSIGNMENT_PREAMBLE = /^Complete assignment thoroughly:\s*/i;
+
+/**
+ * One-line gist of a delegated assignment for live previews: the first line
+ * with content under the template's action section (`# Change`, `# Goal`, …),
+ * else the first content line anywhere — skipping headings, empty
+ * placeholders (`None.`), and list markers. Falls back to the whole text when
+ * every line is scaffolding.
+ */
+export function assignmentGist(assignment: string): string {
+	const text = sanitizeText(assignment).replace(ASSIGNMENT_PREAMBLE, "");
+	let first: string | undefined;
+	let inActionSection = false;
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		const heading = ASSIGNMENT_HEADING.exec(line);
+		if (heading) {
+			inActionSection = ASSIGNMENT_ACTION_SECTION.test(heading[1] ?? "");
+			continue;
+		}
+		if (!line || ASSIGNMENT_PLACEHOLDER_LINE.test(line)) continue;
+		const content = line.replace(/^([-*+]|\d+[.)])\s+/, "");
+		if (inActionSection) return content;
+		first ??= content;
+	}
+	return first ?? text.trim();
+}
+
 const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
 
 function extractMissingYieldWarning(output: string): { warning?: string; rest: string } {
@@ -745,7 +778,7 @@ function renderAgentProgress(
 			description: fullDescription,
 			preview:
 				progress.status === "running" && !fullDescription
-					? ` ${theme.fg("muted", previewLine(sanitizeText(progress.assignment ?? progress.task), 40))}`
+					? ` ${theme.fg("muted", previewLine(assignmentGist(progress.assignment ?? progress.task), 40))}`
 					: undefined,
 			stats: progress.status === "running" || progress.status === "completed" ? progress : undefined,
 			completionPercent: progress.completionPercent,

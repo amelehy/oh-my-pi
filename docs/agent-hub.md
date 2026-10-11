@@ -30,7 +30,7 @@ The roster updates from the session's agent registry and progress events. Its re
 - assigned task or current activity;
 - cost, active time or elapsed span, request count, tool-call count, and tokens.
 
-The header aggregates status and usage across measured agents. Press `t` to switch between the operationally ordered flat roster and a parent/child tree. Press `/` to filter agents by id or display name.
+The header aggregates status and usage across measured agents. The Hub opens on the agent tree, with each subagent nested under the agent that spawned it; press `t` to switch to the operationally ordered flat roster and back. Press `/` to filter agents by id or display name.
 
 On a wide terminal, the selected agent's inspector appears beside the roster. On a narrow terminal, press `Tab` to replace the roster with it. The inspector adds:
 
@@ -47,7 +47,7 @@ Metrics depend on the progress or persisted usage data available for that agent.
 | --------------------------- | ---------------------------------------------------------------------------- |
 | `j` / `k`, `↑` / `↓`, wheel | Select an agent.                                                             |
 | `Enter` or click            | Open the selected agent.                                                     |
-| `t`                         | Toggle flat and parent/child views.                                          |
+| `t`                         | Toggle the agent tree and the flat roster.                                   |
 | `/`                         | Filter agents by id or display name.                                        |
 | `1` / `2`                   | Switch between Agents and Activity sections.                               |
 | `Tab`                       | Toggle the inspector on narrow terminals.                                    |
@@ -80,13 +80,30 @@ Steering uses the normal prompt path, so the message and response are written to
 
 Contexts without a local focusable session use the Hub's full-screen transcript viewer instead. This includes collab guests, advisor rows, and aborted agents; advisor and aborted transcripts are read-only. The viewer incrementally tails the file-backed transcript and provides an input line only when the selected agent can be messaged. Sending there has the same semantics: revive if parked, steer if running, and prompt if idle.
 
-## Pinned jump list and click to focus
+## Pinned agent tree and click to focus
 
-While subagents run, a pinned `Subagents` block above the editor lists every live agent — sync task calls and detached background spawns alike.
+While subagents run, a pinned `Agents` block above the editor shows them live as a tree — sync task calls and detached background spawns alike:
 
-The list stays short: it shows a few rows plus an expander (`display.pinnedAgents: collapsed`, the default), lists everything (`full`), or hides entirely (`off`). Clicking the expander toggles between the two while `tui.mouse` is on.
+```
+ Agents  ⣟ 3 running  ✔ 2 done                                  $0.218 · ⌃S hub
+  ├─ ⣟ Alpha: Run sleep 40 command and reply done                    37s · $0.058
+  │    └ bash: Sleeping 40 seconds · 35.3s
+  ├─ ⣟ Bravo: Spawn two parallel subagents to run sleep              37s · $0.071
+  │  │ └ wait: Waiting for background work
+  │  ├─ ✔ BravoOne: Run sleep 30 command with timeout                33s · $0.056
+  │  └─ ✔ BravoTwo: Run sleep 30 command with timeout                33s · $0.014
+  └─ ⣟ Charlie: Run sleep commands and read hosts file               37s · $0.019
+       └ bash: Sleeping twenty-five seconds · 20.6s
+```
 
-Set `display.subagentLivePreview: true` to add a second line under each row showing what that agent is doing: its current tool call (or, between calls, the most recent one) with a one-line detail, plus the elapsed time once a call runs longer than five seconds. Off by default.
+- **Tree**: each agent sits under the agent that spawned it, named relative to its parent.
+- **Status**: a spinner while running, then `✔` done, `✘` failed, or `⊘` aborted. The header counts each outcome and totals the wave's spend; the hub key on the right opens Agent Hub for the full inspector.
+- **Activity**: under each running agent, what it is doing right now — its current tool call with a one-line detail (and the elapsed time once a call runs longer than five seconds), the last call and how it ended between calls, a pending retry, or that it is still starting or thinking. Turn these rows off with `display.subagentLivePreview: false`.
+- **Metrics**: active time and spend per agent, right-aligned when the terminal is wide enough.
+
+Finished agents stay listed with their outcome while their wave — siblings from the same `task` call, or the rest of the same top-level agent's subtree — still has an agent running, so progress reads as "2 of 5 done" instead of rows vanishing. The block clears once no subagent is active.
+
+The tree stays short: collapsed (`display.pinnedAgents: collapsed`, the default) it shows a few agents — running ones first, each with the agents above it, then failures — plus an expander naming what it hides; `full` lists every agent, and `off` hides the block. Clicking the expander toggles between the two while `tui.mouse` is on.
 
 Enable `tui.mouse` to click live subagent cards and jump-list rows directly in the main session, without opening the Hub first. A click focuses that card's most recent agent (a jump-list row focuses its exact agent); focusing a parked agent revives it. Hovering a live target lights it up first, so you can see what a click will open.
 

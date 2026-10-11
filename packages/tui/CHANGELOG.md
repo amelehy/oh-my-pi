@@ -5,6 +5,7 @@
 ### Added
 
 - Added opt-in JSON editing for free-form array settings, with credential settings kept masked in rows and editors ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
+- Added `markFinalAnswer` and `AssistantMessageComponent.setFinalAnswer` to box a turn's final answer under a `✓ Answer` title with the turn's totals (live and rebuilt transcripts alike), and `TranscriptContainer.resetBlockStableRows` so a block whose rows never reached terminal history can change how it presents them
 
 ### Changed
 

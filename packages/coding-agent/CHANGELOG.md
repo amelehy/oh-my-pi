@@ -6,6 +6,7 @@
 
 - Added `ctx.annotations` so extensions can submit or collect `/annotate` feedback on text and diffs ([#15260](https://github.com/can1357/oh-my-pi/pull/15260) by [@Shadorain](https://github.com/Shadorain)).
 - Added **Extra Context Files** to `/settings` → **Context** so custom instruction filenames can be configured without editing YAML ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
+- Added `display.answerFrame` (on by default): each turn's final answer renders in an accent box titled `✓ Answer` with the turn's time, tokens, and cost, so it stands apart from the tool calls and steps above it; a long answer whose head already scrolled into terminal history gets a closing `✓ Answer ↑` rule instead
 
 ### Changed
 

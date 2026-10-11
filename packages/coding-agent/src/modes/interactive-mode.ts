@@ -326,6 +326,7 @@ import {
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
+	cfgDisplayAnswerFrame,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
@@ -426,6 +427,7 @@ const cfgLiveUiSettings = combine({
 	"display.collapseCompacted": cfgDisplayCollapseCompacted,
 	"display.showTokenUsage": cfgDisplayShowTokenUsage,
 	"display.showTurnTime": cfgDisplayShowTurnTime,
+	"display.answerFrame": cfgDisplayAnswerFrame,
 	"tui.renderMermaid": cfgTuiRenderMermaid,
 	"tui.renderSvg": cfgTuiRenderSvg,
 	"tui.autoGraph": cfgTuiAutoGraph,
@@ -3193,11 +3195,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		}
 
-		// Usage-row detection, compacted-history collapse, and markdown render
-		// options are baked in at build time: rebuild, then retire rows already
-		// committed to native scrollback.
+		// Usage-row detection, compacted-history collapse, final-answer frames,
+		// and markdown render options are baked in at build time: rebuild, then
+		// retire rows already committed to native scrollback.
 		if (
-			any("display.cacheMissMarker", "display.collapseCompacted", "display.showTokenUsage", "display.showTurnTime")
+			any(
+				"display.cacheMissMarker",
+				"display.collapseCompacted",
+				"display.showTokenUsage",
+				"display.showTurnTime",
+				"display.answerFrame",
+			)
 		) {
 			rebuildChat = true;
 		}

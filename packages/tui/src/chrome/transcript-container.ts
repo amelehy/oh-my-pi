@@ -299,6 +299,28 @@ export class TranscriptContainer extends Container {
 	}
 
 	/**
+	 * Retract `component`'s published stable rows so it may change how it
+	 * presents rows it already published — e.g. boxing a turn's final answer.
+	 * Safe without a display reset only while none of the block's rows reached
+	 * terminal history (the {@link canRemoveBlock} condition): published rows
+	 * that were never emitted exist only in this ledger. Returns false, and
+	 * changes nothing, once any row was emitted, committed, or offered.
+	 */
+	resetBlockStableRows(component: Component): boolean {
+		const index = this.#removableIndex(component);
+		if (index < 0) return false;
+		const entry = this.#entries[index]!;
+		entry.stableRows = EMPTY_STABLE_ROWS;
+		entry.renderedStableByWidth = new Map();
+		entry.stableRowCountByWidth = new Map();
+		entry.stableFrozen = false;
+		if (entry.mode === "appendOnly") {
+			(entry.component as Component & AppendOnlyTranscriptBlock).resetTranscriptStableRows?.();
+		}
+		return true;
+	}
+
+	/**
 	 * Syncs entries, then returns `component`'s index if it can be discarded
 	 * without leaving tape history (not committed, not emitted, not in an
 	 * offered batch), else -1.

@@ -635,6 +635,19 @@ export const cfgDisplaySubagentLivePreview = register({
 	},
 });
 
+export const cfgDisplayAnswerFrame = register({
+	id: "display.answerFrame",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Frame Final Answer",
+		description:
+			"Box each turn's final answer, titled with the turn's time, tokens and cost, so it stands apart from the steps above it",
+	},
+});
+
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
@@ -702,6 +715,7 @@ effect(
 		cacheMissMarker: cfgDisplayCacheMissMarker,
 		showTokenUsage: cfgDisplayShowTokenUsage,
 		showTurnTime: cfgDisplayShowTurnTime,
+		answerFrame: cfgDisplayAnswerFrame,
 	}),
 	setChatTranscriptDisplayPreferences,
 );

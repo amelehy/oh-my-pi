@@ -586,7 +586,8 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * Set this answer apart as the turn's final message so it reads apart from
 	 * the steps logged above it. `frame` draws an accent box titled `✓ Answer`
-	 * (with the turn's totals) around the reply; it changes every row, so the
+	 * (with the turn's totals) on a lighter `customMessageBg` fill around the
+	 * reply; it changes every row, so the
 	 * host passes it only while none of the block's rows have reached terminal
 	 * scrollback. `rule` closes an answer whose head already scrolled into
 	 * history with an accent rule under it, leaving the emitted rows untouched.
@@ -830,7 +831,11 @@ export class AssistantMessageComponent extends Container {
 		return { label, meta };
 	}
 
-	/** The reply inside an accent box titled with {@link #answerTitle}; trailing markers stay below it. */
+	/**
+	 * The reply inside an accent box titled with {@link #answerTitle}, filled
+	 * with `customMessageBg` so it reads lighter than the terminal, the prompt
+	 * band, and tool output; trailing markers stay below it.
+	 */
 	#renderAnswerFrame(width: number): readonly string[] {
 		// Prose children carry their own one-column side padding, so the frame adds none.
 		const content = trimBlankEdges(this.#contentContainer.render(Math.max(1, width - 2)));
@@ -842,6 +847,7 @@ export class AssistantMessageComponent extends Container {
 				sections: [{ lines: content }],
 				width,
 				borderColor: "accent",
+				fill: "customMessageBg",
 				contentPaddingLeft: 0,
 			},
 			theme,

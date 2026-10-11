@@ -31,13 +31,17 @@ function reply(stopReason: AssistantMessage["stopReason"], content: AssistantMes
 	} as unknown as AssistantMessage;
 }
 
-function finish(message: AssistantMessage): string[] {
+function finishRaw(message: AssistantMessage): readonly string[] {
 	const container = new TranscriptContainer();
 	const component = new AssistantMessageComponent(message);
 	container.addChild(component);
 	component.setTurnUsage({ elapsedMs: 12_400, input: 18_000, output: 1_000, cost: 0.02 });
 	markFinalAnswer(container, component, message);
-	return component.render(60).map(row => Bun.stripANSI(row));
+	return component.render(60);
+}
+
+function finish(message: AssistantMessage): string[] {
+	return finishRaw(message).map(row => Bun.stripANSI(row));
 }
 
 describe("final answer frame", () => {
@@ -60,6 +64,20 @@ describe("final answer frame", () => {
 		expect(body).toStartWith(theme.boxRound.vertical);
 		expect(body.trimEnd()).toEndWith(theme.boxRound.vertical);
 		for (const row of rows) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(60);
+	});
+
+	it("fills every row of the box, table rows included, with the lighter answer background", () => {
+		setChatTranscriptDisplayPreferences({ answerFrame: true });
+		const fill = theme.getBgAnsi("customMessageBg");
+		const rows = finishRaw(
+			reply("stop", [{ type: "text", text: "Done.\n\n| Agent | Time |\n|---|---|\n| Alpha | 29.4s |" }]),
+		);
+		for (const row of rows) expect(row).toStartWith(fill);
+		// Inner resets (bold, table borders) re-apply the fill so it never drops out mid-row.
+		const tableRow = rows.find(row => Bun.stripANSI(row).includes("Alpha"))!;
+		for (const reset of tableRow.matchAll(/\x1b\[(?:0|49)?m(?!$)/g)) {
+			expect(tableRow.slice(reset.index! + reset[0].length)).toStartWith(fill);
+		}
 	});
 
 	it("leaves step replies, prose-less turns, and the disabled setting unboxed", () => {

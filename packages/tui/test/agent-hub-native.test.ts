@@ -97,6 +97,8 @@ test("without the picker kind, a native select on the roster moves the selection
 	const hub = createHub([agent("alpha", 3_000), agent("beta", 2_000), agent("gamma", 1_000)], focused);
 	try {
 		expect(hub.nativeSheet(genericCx)).toBe(false);
+		// The hub opens on the agent tree; the flat roster is the selectable native list.
+		hub.handleInput("t");
 		expect(selectedRosterId(hub)).toBe("alpha");
 
 		hub.handleNativeEvent({ type: "select", key: "body/agents", item: "gamma" });
@@ -128,12 +130,9 @@ test("picker select and the Open transcript action take Enter's path on the chos
 	}
 });
 
-test("the By parent action and the t key both switch the picker to the parent tree", () => {
+test("the hub opens on the agent tree; the view action and the t key flip to the flat roster and back", () => {
 	const hub = createHub([agent("Lead", 3_000), agent("Worker", 2_000, { parentId: "Lead" }), agent("Solo", 1_000)]);
 	try {
-		expect(pickerProps(hub).layout).toBe("rows");
-
-		hub.handleNativeEvent({ type: "action", key: "", act: "view", mods: [] });
 		const tree = pickerProps(hub);
 		expect(tree.layout).toBe("tree");
 		expect(tree.actions?.find(action => action.id === "view")?.on).toBe(true);
@@ -143,8 +142,13 @@ test("the By parent action and the t key both switch the picker to the parent tr
 			["Solo", 0],
 		]);
 
+		hub.handleNativeEvent({ type: "action", key: "", act: "view", mods: [] });
+		const flat = pickerProps(hub);
+		expect(flat.layout).toBe("rows");
+		expect(flat.actions?.find(action => action.id === "view")?.on).toBe(false);
+
 		hub.handleInput("t");
-		expect(pickerProps(hub).layout).toBe("rows");
+		expect(pickerProps(hub).layout).toBe("tree");
 	} finally {
 		hub.dispose();
 	}

@@ -46,7 +46,7 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "./transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
-import { AssistantMessageComponent } from "./assistant-message";
+import { AssistantMessageComponent, markFinalAnswer } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { detectCacheInvalidation } from "./cache-invalidation-marker";
@@ -522,6 +522,7 @@ export class ChatTranscriptBuilder {
 		}
 		const turnUsage = this.#turnUsage.add(message, this.#turnStartedAt);
 		if (turnUsage) lastAssistantComponent.setTurnUsage(turnUsage);
+		markFinalAnswer(this.container, lastAssistantComponent, message);
 
 		this.#pendingUsage =
 			displayPreferences.showTokenUsage && assistantUsageIsBilled(message.usage) ? message.usage : undefined;

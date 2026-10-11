@@ -1,8 +1,9 @@
 /**
- * Contract: the anchored subagent HUD (rendered above the editor, next to the
+ * Contract: the pinned agent tree (rendered above the editor, next to the
  * Todos block) lists every running subagent — detached background spawns and
- * sync task calls alike — as numbered `N Id: description` jump-list rows and
- * yields no output once nothing qualifies, so the block self-clears.
+ * sync task calls alike — nested under its spawner, keeps finished agents of a
+ * still-running wave listed with their outcome, and yields no output once
+ * nothing is active, so the block self-clears.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as os from "node:os";
@@ -10,15 +11,19 @@ import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { resetHangulCompatibilityJamoWidthForTests, setHangulCompatibilityJamoWidth } from "@oh-my-pi/pi-tui";
-import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
 import {
-	InteractiveMode,
-	layoutPinnedHud,
-	nextSubagentPreviewTickMs,
-	renderSubagentHudLines,
+	resetHangulCompatibilityJamoWidthForTests,
+	SPINNER_ADVANCE_MS,
+	setHangulCompatibilityJamoWidth,
+} from "@oh-my-pi/pi-tui";
+import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
+import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import {
+	buildSubagentHudView,
+	SUBAGENT_HUD_COLLAPSED_LIMIT,
 	SubagentHudComponent,
-} from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+	type SubagentHudOptions,
+} from "@oh-my-pi/pi-coding-agent/modes/subagent-hud";
 import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -96,8 +101,17 @@ function makeProgressPayload(
 	};
 }
 
+/** HUD lines at spinner frame 0, or none when the block clears. */
+function hudLines(
+	sessions: ObservableSession[],
+	columns = 120,
+	options: Omit<SubagentHudOptions, "columns"> = {},
+): string[] {
+	return buildSubagentHudView(sessions, { columns, spinnerFrame: 0, ...options })?.lines ?? [];
+}
+
 function render(sessions: ObservableSession[], columns = 120, livePreview = false): string {
-	return Bun.stripANSI(renderSubagentHudLines(sessions, columns, false, livePreview).join("\n"));
+	return Bun.stripANSI(hudLines(sessions, columns, { livePreview }).join("\n"));
 }
 
 describe("subagent HUD lines", () => {
@@ -161,7 +175,7 @@ describe("subagent HUD lines", () => {
 			];
 			cfgTaskShowResolvedModelBadge.override(Settings.instance, false);
 			const disabled = render(sessions);
-			expect(disabled).toContain(`${theme.status.done} HiddenBadge: Inspect rendering`);
+			expect(disabled).toContain(`${theme.spinnerFrames[0]} HiddenBadge: Inspect rendering`);
 			expect(disabled).not.toContain("openai/gpt-5");
 			expect(disabled).not.toContain(theme.icon.advisor);
 
@@ -241,19 +255,61 @@ describe("subagent HUD lines", () => {
 					progress: makeProgress({ id: "LegacyWorker", resolvedModel: "custom/model:high" }),
 				}),
 			]);
-			expect(out).toContain(`${theme.status.done} custom/model:high LegacyWorker`);
+			expect(out).toContain(`${theme.spinnerFrames[0]} custom/model:high LegacyWorker`);
 			expect(out).not.toContain(theme.thinking.high.split(" ")[0]);
 		});
 	});
 
-	it("renders running subagents as Id: description under a Subagents header", () => {
+	it("renders running subagents as Id: description under an Agents header with live counts", () => {
 		const out = render([
 			makeSession({ id: "AuthLoader", description: "Refactoring the auth flow" }),
 			makeSession({ id: "SchemaMigrator", description: "Migrating the users table" }),
 		]);
-		expect(out).toContain("Subagents");
+		expect(out).toContain("Agents");
+		expect(out).toContain("2 running");
 		expect(out).toContain("AuthLoader: Refactoring the auth flow");
 		expect(out).toContain("SchemaMigrator: Migrating the users table");
+	});
+
+	it("nests spawned agents under their spawner with ids relative to it", () => {
+		const lines = hudLines([
+			makeSession({ id: "Bravo", description: "Refactor billing" }),
+			makeSession({ id: "Bravo.Schema", description: "Extract schema" }),
+			makeSession({ id: "Bravo.Schema.Types", description: "Generate types" }),
+			makeSession({ id: "Charlie", description: "Summarize bugs" }),
+		]).map(line => Bun.stripANSI(line));
+		const indentOf = (text: string) => {
+			const line = lines.find(row => row.includes(text))!;
+			return line.indexOf(text);
+		};
+		expect(lines.some(row => row.includes("Schema: Extract schema"))).toBe(true);
+		expect(lines.some(row => row.includes("Types: Generate types"))).toBe(true);
+		expect(lines.some(row => row.includes("Bravo>Schema"))).toBe(false);
+		expect(indentOf("Schema: Extract")).toBeGreaterThan(indentOf("Bravo: Refactor"));
+		expect(indentOf("Types: Generate")).toBeGreaterThan(indentOf("Schema: Extract"));
+		expect(indentOf("Charlie: Summarize")).toBe(indentOf("Bravo: Refactor"));
+	});
+
+	it("keeps finished agents of a running wave listed with their outcome, then clears", () => {
+		const wave = (status: ObservableSession["status"]) => [
+			makeSession({ id: "Lead", description: "Coordinate", status }),
+			makeSession({ id: "Lead.Done", description: "finished helper", status: "completed" }),
+			makeSession({ id: "Lead.Broke", description: "failed helper", status: "failed" }),
+			makeSession({ id: "Sibling", description: "same call", status: "completed", parentToolCallId: "call-1" }),
+			makeSession({ id: "Runner", description: "still going", status, parentToolCallId: "call-1" }),
+			makeSession({ id: "Elsewhere", description: "earlier wave", status: "completed", parentToolCallId: "call-0" }),
+		];
+		const out = render(wave("active"));
+		const success = Bun.stripANSI(theme.styledSymbol("status.success", "success"));
+		const error = Bun.stripANSI(theme.styledSymbol("status.error", "error"));
+		expect(out).toContain(`${success} Done: finished helper`);
+		expect(out).toContain(`${error} Broke: failed helper`);
+		expect(out).toContain(`${success} Sibling: same call`);
+		expect(out).not.toContain("Elsewhere");
+		expect(out).toContain("2 done");
+		expect(out).toContain("1 failed");
+
+		expect(hudLines(wave("completed"))).toEqual([]);
 	});
 
 	it("shows a non-default role badge and hides descriptions that only echo the id", () => {
@@ -313,7 +369,7 @@ describe("subagent HUD lines", () => {
 			{ id: "main", kind: "main", label: "Main Session", status: "active", lastUpdate: Date.now() },
 			...finishedStates.map(status => makeSession({ id: `Done-${status}`, status, description: "old work" })),
 		];
-		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
+		expect(hudLines(sessions)).toEqual([]);
 
 		const out = render([...sessions, makeSession({ id: "StillRunning", description: "live work" })]);
 		expect(out).toContain("StillRunning: live work");
@@ -344,8 +400,9 @@ describe("subagent HUD lines", () => {
 			}),
 		]);
 		expect(multiLineTask).toContain("ReviewShell");
-		expect(multiLineTask).toContain("Complete assignment thoroughly: ↵ # Tar");
-		expect(multiLineTask).not.toContain("\n# Target");
+		// The preview skips the assignment preamble and template headings.
+		expect(multiLineTask).toContain("Files: src/foo.ts");
+		expect(multiLineTask).not.toContain("# Target");
 
 		const multiLineDesc = render([
 			makeSession({
@@ -370,11 +427,9 @@ describe("subagent HUD lines", () => {
 		expect(out).toContain("BackgroundSpawn: detached work");
 		expect(out).toContain("SyncSpawn: inline task work");
 		expect(out).toContain("EvalSpawn: eval cell work");
-		const hud = new SubagentHudComponent(renderSubagentHudLines(sessions, 120), [
-			"SyncSpawn",
-			"EvalSpawn",
-			"BackgroundSpawn",
-		]);
+		const view = buildSubagentHudView(sessions, { columns: 120 })!;
+		expect(view.order).toEqual(["SyncSpawn", "EvalSpawn", "BackgroundSpawn"]);
+		const hud = new SubagentHudComponent(view.lines, view.order, view.toggleRow);
 		hud.render(120);
 		expect(hud.getClickAgentAtRow(2)).toBe("SyncSpawn");
 		expect(hud.getClickAgentAtRow(3)).toBe("EvalSpawn");
@@ -463,7 +518,7 @@ describe("subagent HUD lines", () => {
 			}),
 		);
 
-		const out = Bun.stripANSI(renderSubagentHudLines(active, 120, true).join("\n"));
+		const out = Bun.stripANSI(hudLines(active, 120, { expanded: true }).join("\n"));
 
 		for (const session of active) {
 			expect(out).toContain(`${session.id}: ${session.description}`);
@@ -472,20 +527,37 @@ describe("subagent HUD lines", () => {
 		expect(out).toContain("show less");
 	});
 
-	it("collapses to a few rows with an expander by default", () => {
+	it("collapses to a few rows with an expander, running agents first", () => {
 		const active = Array.from({ length: 10 }, (_, index) =>
 			makeSession({
 				id: `Worker${index}`,
 				description: `job ${index}`,
+				status: index < 3 ? "completed" : "active",
+				parentToolCallId: "call-1",
 			}),
 		);
 
 		const out = render(active, 120);
-		expect(out).toContain("Worker0: job 0");
-		expect(out).toContain("Worker2: job 2");
-		expect(out).not.toContain("Worker3: job 3");
-		expect(out).toContain("7 more — expand");
+		for (let index = 3; index < 3 + SUBAGENT_HUD_COLLAPSED_LIMIT; index++) {
+			expect(out).toContain(`Worker${index}: job ${index}`);
+		}
+		expect(out).not.toContain("Worker0: job 0");
+		expect(out).toContain("5 more (2 running, 3 done) — expand");
 		expect(out).not.toContain("show less");
+	});
+
+	it("keeps a running agent's spawner when collapsed so no row is orphaned", () => {
+		const sessions = [
+			...Array.from({ length: 6 }, (_, index) =>
+				makeSession({ id: `Done${index}`, status: "completed", parentToolCallId: "call-1" }),
+			),
+			makeSession({ id: "Parent", status: "completed", parentToolCallId: "call-1" }),
+			makeSession({ id: "Parent.Child", description: "deep work", parentToolCallId: "call-1" }),
+		];
+		const out = render(sessions, 120);
+		expect(out).toContain("Child: deep work");
+		expect(out).toMatch(/Parent[\s\S]*Child: deep work/);
+		expect(out).toContain("3 more (3 done) — expand");
 	});
 
 	describe("live preview", () => {
@@ -686,38 +758,32 @@ describe("subagent HUD lines", () => {
 				}),
 			];
 			for (const columns of [60, 120]) {
-				const hud = new SubagentHudComponent(
-					renderSubagentHudLines(sessions, columns, false, true),
-					sessions.map(session => session.id),
-				);
+				const view = buildSubagentHudView(sessions, { columns, livePreview: true })!;
+				const hud = new SubagentHudComponent(view.lines, view.order, view.toggleRow);
 				const rows = hud.render(columns).map(row => Bun.stripANSI(row));
 				for (const row of rows) {
 					expect(Bun.stringWidth(row)).toBeLessThanOrEqual(columns);
 				}
-				const elapsedRows = rows.filter(row => /\d+s/.test(row));
-				expect(elapsedRows.length).toBeGreaterThan(0);
-				for (const row of elapsedRows) {
-					expect(row).toMatch(/bash|read/);
+				const activityRows = rows.filter(row => /\b(bash|read):/.test(row));
+				expect(activityRows).toHaveLength(2);
+				for (const row of activityRows) {
+					expect(row.trimEnd()).toMatch(/· \d+\.\ds$/);
 				}
 			}
 		});
 
 		it("routes clicks on a preview row to its agent and keeps later rows and the expander aligned", () => {
-			const sessions = ["Alpha", "Beta", "Gamma", "Delta"].map(id =>
+			const sessions = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].map(id =>
 				makeSession({ id, progress: makeProgress({ id, currentTool: "read", currentToolArgs: `${id}.ts` }) }),
 			);
-			const layout = layoutPinnedHud(sessions.length, false);
-			const hud = new SubagentHudComponent(
-				renderSubagentHudLines(sessions, 120, false, true),
-				sessions.map(session => session.id),
-				layout.toggleRow,
-			);
+			const view = buildSubagentHudView(sessions, { columns: 120, livePreview: true })!;
+			const hud = new SubagentHudComponent(view.lines, view.order, view.toggleRow);
 			const rows = hud.render(120).map(row => Bun.stripANSI(row));
 			const rowOf = (text: string) => rows.findIndex(row => row.includes(text));
 			expect(hud.getClickAgentAtRow(rowOf("Alpha.ts"))).toBe("Alpha");
 			expect(hud.getClickAgentAtRow(rowOf("Beta"))).toBe("Beta");
 			expect(hud.getClickAgentAtRow(rowOf("Gamma.ts"))).toBe("Gamma");
-			expect(hud.getClickAgentAtRow(rowOf("more — expand"))).toBe(PINNED_HUD_TOGGLE_ID);
+			expect(hud.getClickAgentAtRow(rowOf("— expand"))).toBe(PINNED_HUD_TOGGLE_ID);
 		});
 
 		it("labels a call with its own intent, never an earlier call's", () => {
@@ -765,25 +831,44 @@ describe("subagent HUD lines", () => {
 				makeSession({ id: `Worker${"W".repeat(80)}`, description: "Every available column ".repeat(10) }),
 			];
 			for (const columns of [40, 60]) {
-				const hud = new SubagentHudComponent(renderSubagentHudLines(sessions, columns, false, true), [
-					sessions[0]!.id,
-				]);
-				// No wrapping: exactly the blank row, the header and one agent row.
-				expect(hud.render(columns)).toHaveLength(3);
+				const view = buildSubagentHudView(sessions, { columns, livePreview: true })!;
+				const hud = new SubagentHudComponent(view.lines, view.order, view.toggleRow);
+				// No wrapping: exactly the blank row, the header, the agent row and its activity row.
+				expect(hud.render(columns)).toHaveLength(4);
 			}
 		});
 
-		it("arms the repaint for when the elapsed marker first shows, then every second", () => {
-			const now = 100_000;
-			const midCall = (id: string, startMs: number) =>
-				makeSession({ id, progress: makeProgress({ id, currentTool: "bash", currentToolStartMs: startMs }) });
-			const thinking = makeSession({ id: "Thinking", progress: makeProgress({ id: "Thinking" }) });
-			expect(nextSubagentPreviewTickMs([thinking], now)).toBeUndefined();
-			expect(nextSubagentPreviewTickMs([midCall("Fresh", now - 1_000)], now)).toBe(4_001);
-			expect(nextSubagentPreviewTickMs([midCall("Long", now - 30_000)], now)).toBe(1_000);
+		it("says an agent is starting or thinking before its first tool call", () => {
+			const starting = render([makeSession({ id: "Fresh" })], 120, true);
+			expect(starting).toContain("starting…");
+			const thinking = render(
+				[makeSession({ id: "Planner", progress: makeProgress({ id: "Planner", lastIntent: "Mapping the repo" }) })],
+				120,
+				true,
+			);
+			expect(thinking).toContain("thinking: Mapping the repo");
+		});
+	});
+
+	describe("repaint tick", () => {
+		it("animates while an agent runs and stops when paused or nothing runs", () => {
+			const running = [makeSession({ id: "Live" })];
+			// The next repaint lands on the shared spinner clock's next step, at most one step away.
+			const now = vi.spyOn(performance, "now").mockReturnValue(10 * SPINNER_ADVANCE_MS + 30);
+			expect(buildSubagentHudView(running, { columns: 120 })?.tickMs).toBe(SPINNER_ADVANCE_MS - 30);
+			now.mockRestore();
+			expect(buildSubagentHudView(running, { columns: 120, animate: false })?.tickMs).toBeUndefined();
 			expect(
-				nextSubagentPreviewTickMs([thinking, midCall("Fresh", now - 4_500), midCall("Long", now - 30_000)], now),
-			).toBe(501);
+				buildSubagentHudView([makeSession({ id: "Done", status: "completed" })], { columns: 120 }),
+			).toBeUndefined();
+		});
+
+		it("advances the spinner glyph with the frame", () => {
+			const sessions = [makeSession({ id: "Live" })];
+			const frame = (spinnerFrame: number) =>
+				Bun.stripANSI(buildSubagentHudView(sessions, { columns: 120, spinnerFrame })!.lines[2]!);
+			expect(frame(0)).toContain(`${theme.spinnerFrames[0]} Live`);
+			expect(frame(1)).toContain(`${theme.spinnerFrames[1]} Live`);
 		});
 	});
 });
@@ -794,7 +879,7 @@ describe("SubagentHudComponent click rows", () => {
 	});
 
 	it("maps item rows to session ids and chrome rows nowhere", () => {
-		const lines = renderSubagentHudLines([makeSession({ id: "Alpha" }), makeSession({ id: "Beta" })], 120);
+		const lines = hudLines([makeSession({ id: "Alpha" }), makeSession({ id: "Beta" })]);
 		const hud = new SubagentHudComponent(lines, ["Alpha", "Beta"]);
 
 		const rendered = hud.render(120);
@@ -868,24 +953,6 @@ describe("SubagentHudComponent click rows", () => {
 	});
 });
 
-describe("layoutPinnedHud", () => {
-	it("fits small lists without an expander", () => {
-		expect(layoutPinnedHud(0, false)).toEqual({ itemRows: 0, toggle: undefined, toggleRow: undefined });
-		expect(layoutPinnedHud(3, false)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
-		expect(layoutPinnedHud(3, true)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
-	});
-
-	it("collapses longer lists behind an expander", () => {
-		expect(layoutPinnedHud(4, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
-		expect(layoutPinnedHud(10, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
-	});
-
-	it("expands to every row with a collapse row", () => {
-		expect(layoutPinnedHud(5, true)).toEqual({ itemRows: 5, toggle: "collapse", toggleRow: 7 });
-		expect(layoutPinnedHud(10, true)).toEqual({ itemRows: 10, toggle: "collapse", toggleRow: 12 });
-	});
-});
-
 describe("InteractiveMode subagent observer UI sync", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -953,32 +1020,33 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		}
 
 		await Promise.resolve();
-		vi.runAllTimers();
+		vi.advanceTimersByTime(100); // observer UI coalesce window
 		await Promise.resolve();
 
 		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
-		expect(hud).toContain("BurstAgent0: Burst job 0");
-		expect(hud).toContain("BurstAgent2: Burst job 2");
-		expect(hud).not.toContain("BurstAgent3: Burst job 3");
-		expect(hud).toContain("3 more — expand");
+		for (let index = 0; index < SUBAGENT_HUD_COLLAPSED_LIMIT; index++) {
+			expect(hud).toContain(`BurstAgent${index}: Burst job ${index}`);
+		}
+		expect(hud).not.toContain("BurstAgent5: Burst job 5");
+		expect(hud).toContain("1 more (1 running) — expand");
 		expect(mountHud.mock.calls.length + updateHud.mock.calls.length).toBe(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
 	it("applies the setting over a clicked expand override", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
-		for (let index = 0; index < 5; index++) {
+		for (let index = 0; index < 7; index++) {
 			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(`Override${index}`, index, `job ${index}`));
 		}
 		await Promise.resolve();
 		const hudText = () => Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
 
 		mode.togglePinnedHudExpanded();
-		expect(hudText()).toContain("Override4");
+		expect(hudText()).toContain("Override6");
 
 		mode.applyPinnedAgentsSetting();
-		expect(hudText()).not.toContain("Override4");
-		expect(hudText()).toContain("more — expand");
+		expect(hudText()).not.toContain("Override6");
+		expect(hudText()).toContain("— expand");
 	});
 
 	it("advances a quiet call's elapsed marker by repainting the same HUD in place", async () => {
@@ -1003,6 +1071,10 @@ describe("InteractiveMode subagent observer UI sync", () => {
 
 		vi.advanceTimersByTime(1_000);
 		expect(mode.subagentContainer.children[0]).toBe(hud);
-		expect(hudText()).toContain("bash: sleep 40 · 21.1s");
+		// The repaint tick follows the shared spinner clock, so the last repaint lands
+		// within one spinner step of the advanced time: the marker moved forward by ~1s.
+		const elapsed = Number(/bash: sleep 40 · (\d+\.\d)s/.exec(hudText())?.[1]);
+		expect(elapsed).toBeGreaterThanOrEqual(21);
+		expect(elapsed).toBeLessThanOrEqual(21.1);
 	});
 });

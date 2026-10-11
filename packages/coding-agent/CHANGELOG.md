@@ -6,6 +6,17 @@
 
 - Added `ctx.annotations` so extensions can submit or collect `/annotate` feedback on text and diffs ([#15260](https://github.com/can1357/oh-my-pi/pull/15260) by [@Shadorain](https://github.com/Shadorain)).
 - Added **Extra Context Files** to `/settings` → **Context** so custom instruction filenames can be configured without editing YAML ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
+- Added `display.answerFrame` (on by default): each turn's final answer renders in an accent box titled `✓ Answer` with the turn's time, tokens, and cost, on a lighter background (the theme's `customMessageBg`), so it stands apart from the tool calls and steps above it; a long answer whose head already scrolled into terminal history gets a closing `✓ Answer ↑` rule instead
+
+### Changed
+
+- The pinned `Subagents` jump list is now a live agent tree: subagents nest under the agent that spawned them, each row shows an animated status (running, done, failed, aborted), what the agent is doing right now, and its active time and spend, and the header counts each outcome with the wave's total spend and the Agent Hub key. Finished agents stay listed with their outcome while the rest of their wave runs; collapsed, the tree keeps running agents (and the agents above them) and failures first, and the expander names what it hides
+- `display.subagentLivePreview` (the per-agent activity row) is now on by default
+
+### Fixed
+
+- Fixed local ONNX tiny models (Qwen2.5 1.5B) failing with a Gather index error on prompts longer than the model's position table: the worker now keeps the tail of an over-long prompt and leaves room for the generated tokens
+- Fixed a tiny-model worker that was busy inside an ONNX run being reported as a failed start: the loser of the bind race now waits for it, and respawns if the sibling went away or ran a stale build
 
 ## [18.8.9] - 2026-10-10
 

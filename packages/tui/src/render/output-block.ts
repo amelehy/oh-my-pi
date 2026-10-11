@@ -5,7 +5,7 @@ import type { TspCardStatus, TspPreview, TspSpan, TspText, TspTone } from "@oh-m
 import { node, span } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
-import type { Theme, ThemeColor } from "../theme/theme";
+import type { Theme, ThemeBg, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { getSixelLineMask } from "./sixel";
@@ -26,6 +26,8 @@ export interface OutputBlockOptions {
 	/** Override the state-derived border color. Used for muted "legacy" tool
 	 * frames that should not visually compete with framed-output tools. */
 	borderColor?: ThemeColor;
+	/** Fill the whole block with this background regardless of `state`; `applyBg: false` still turns it off. */
+	fill?: ThemeBg;
 }
 
 const FRAMED_BLOCK_COMPONENT = Symbol("framedBlockComponent");
@@ -90,8 +92,10 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 					: "dim");
 	const border = (text: string) => theme.fg(borderColor, text);
 	const bgFn = (() => {
-		if (!state || !applyBg) return undefined;
-		const bgAnsi = theme.getBgAnsi(getStateBgColor(state));
+		if (!applyBg) return undefined;
+		const bg = options.fill ?? (state ? getStateBgColor(state) : undefined);
+		if (!bg) return undefined;
+		const bgAnsi = theme.getBgAnsi(bg);
 		// Keep block background stable even if inner content contains SGR resets (e.g. "\x1b[0m"),
 		// which would otherwise clear the outer background mid-line.
 		return (text: string) => {
@@ -362,6 +366,7 @@ export class CachedOutputBlock {
 		h.optional(options.headerMeta);
 		h.optional(options.state);
 		h.optional(options.borderColor);
+		h.optional(options.fill);
 		h.bool(options.applyBg ?? true);
 		if (options.sections) {
 			for (const s of options.sections) {

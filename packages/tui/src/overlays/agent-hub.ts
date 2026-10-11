@@ -121,11 +121,11 @@ const SECTION_TABS = [
 	{ id: "activity", label: "2 Activity" },
 ] as const satisfies ReadonlyArray<{ id: AgentHubSection; label: string }>;
 const VIEW_TABS = [
+	{ id: "tree", label: "Tree" },
 	{ id: "roster", label: "Flat" },
-	{ id: "tree", label: "By parent" },
 ] as const satisfies ReadonlyArray<{ id: HubViewMode; label: string }>;
 const AGENT_HINTS: Readonly<Record<HubViewMode, readonly NativeHint[]>> = {
-	roster: agentHints("by parent"),
+	roster: agentHints("tree"),
 	tree: agentHints("flat"),
 };
 const ACTIVITY_HINTS: readonly NativeHint[] = [
@@ -374,8 +374,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#notice: string | undefined;
 	/** Double-tap window state for the table's left-left "close hub" gesture. */
 	#lastLeftTap = 0;
-	/** Operational ordering by default; tree mode groups descendants under their spawner. */
-	#viewMode: HubViewMode = "roster";
+	/** The agent tree by default (descendants under their spawner); `t` flips to the flat operational roster. */
+	#viewMode: HubViewMode = "tree";
 	#treeDepthById = new Map<string, number>();
 	#treeParentById = new Map<string, string>();
 	#treeLastSiblingById = new Map<string, boolean>();
@@ -897,7 +897,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				disabled: readOnly ?? (selected?.status === "parked" ? undefined : "Only parked agents can be revived"),
 			},
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
-			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
+			{ id: "view", label: "Tree", keys: ["t"], on: this.#viewMode === "tree" },
 			{ id: "filter", label: "Filter", keys: ["/"] },
 			CLOSE_ACTION,
 		];
@@ -935,7 +935,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			badges.push({ text: `↳ ${sanitizeDisplaySingleLine(ref.parentId)}`, tone: "muted", title: "Spawned by" });
 		}
 		const model = modelChip(ref, observed);
-		const item: TspPickerItem = {
+		const base: TspPickerItem = {
 			id: ref.id,
 			label: sanitizeDisplaySingleLine(ref.id),
 			mono: true,
@@ -946,10 +946,16 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				: undefined,
 			badges: badges.length > 0 ? badges.slice(0, 3) : undefined,
 		};
-		if (this.#viewMode === "tree") {
-			const depth = this.#treeDepthById.get(ref.id) ?? 0;
-			return { ...item, depth, open: this.#childrenByParent.has(ref.id) ? true : undefined };
-		}
+		// The tree view keeps the same fact columns as the flat roster: status,
+		// time and spend per agent are the point of the default view.
+		const item: TspPickerItem =
+			this.#viewMode === "tree"
+				? {
+						...base,
+						depth: this.#treeDepthById.get(ref.id) ?? 0,
+						open: this.#childrenByParent.has(ref.id) ? true : undefined,
+					}
+				: base;
 		if (!metrics) return item;
 		// A running agent's active time ticks terminal-side from the age at send; a settled one
 		// is frozen text. Progress `durationMs` was current when its frame arrived, so age it to now
@@ -1813,7 +1819,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 
 	#footer(showingNarrowDetails: boolean, availableWidth: number): string {
-		const nextView = this.#viewMode === "roster" ? "by parent" : "flat";
+		const nextView = this.#viewMode === "roster" ? "tree" : "flat";
 		const filter = this.#agentFilterEditing
 			? `/${filterText(this.#agentFilter)}  ·  `
 			: this.#agentFilter.getValue()
@@ -1972,9 +1978,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const active = (label: string): string => theme.bg("selectedBg", theme.bold(theme.fg("accent", ` ${label} `)));
 		const inactive = (label: string): string => theme.fg("muted", ` ${label} `);
 		const projection =
-			this.#viewMode === "roster"
-				? `${active("Flat")}${theme.fg("dim", "/")}${inactive("By parent")}`
-				: `${inactive("Flat")}${theme.fg("dim", "/")}${active("By parent")}`;
+			this.#viewMode === "tree"
+				? `${active("Tree")}${theme.fg("dim", "/")}${inactive("Flat")}`
+				: `${inactive("Tree")}${theme.fg("dim", "/")}${active("Flat")}`;
 		const counts = this.#statusSummary();
 		const header = `${theme.bold("Roster")}${theme.fg("dim", theme.sep.dot)}${projection}${counts ? theme.fg("dim", theme.sep.dot) + counts : ""}`;
 		const lines = wrapTextWithAnsi(header, Math.max(1, width));
@@ -2382,7 +2388,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
-	/** `t`: flat roster ⇄ grouped by parent. */
+	/** `t`: agent tree ⇄ flat roster. */
 	#toggleViewMode(): void {
 		this.#hoveredRow = null;
 		this.#viewMode = this.#viewMode === "roster" ? "tree" : "roster";

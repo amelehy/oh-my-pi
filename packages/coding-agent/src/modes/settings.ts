@@ -608,13 +608,17 @@ export const cfgDisplayPinnedAgents = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: "Pinned Agents",
+		label: "Pinned Agent Tree",
 		description:
-			"Pinned live-agent jump list above the editor (off hides it; collapsed shows a few rows with an expander; full lists all)",
+			"Live agent tree above the editor while subagents run (off hides it; collapsed shows running agents first with an expander; full lists every agent)",
 		options: [
-			{ value: "off", label: "Off", description: "Hide the pinned jump list" },
-			{ value: "collapsed", label: "Collapsed", description: "Show a few rows with an expander" },
-			{ value: "full", label: "Full", description: "Always list every live agent" },
+			{ value: "off", label: "Off", description: "Hide the pinned agent tree" },
+			{
+				value: "collapsed",
+				label: "Collapsed",
+				description: "Show a few agents, running ones first, with an expander",
+			},
+			{ value: "full", label: "Full", description: "Always list every agent in the tree" },
 		],
 	},
 });
@@ -622,12 +626,25 @@ export const cfgDisplayPinnedAgents = register({
 export const cfgDisplaySubagentLivePreview = register({
 	id: "display.subagentLivePreview",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: "Subagent Live Preview",
-		description: "Show each pinned subagent's current (or most recent) tool call beneath its row",
+		label: "Subagent Live Activity",
+		description: "Show what each running agent in the pinned agent tree is doing right now (its current tool call)",
+	},
+});
+
+export const cfgDisplayAnswerFrame = register({
+	id: "display.answerFrame",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Frame Final Answer",
+		description:
+			"Box each turn's final answer, titled with the turn's time, tokens and cost, so it stands apart from the steps above it",
 	},
 });
 
@@ -698,6 +715,7 @@ effect(
 		cacheMissMarker: cfgDisplayCacheMissMarker,
 		showTokenUsage: cfgDisplayShowTokenUsage,
 		showTurnTime: cfgDisplayShowTurnTime,
+		answerFrame: cfgDisplayAnswerFrame,
 	}),
 	setChatTranscriptDisplayPreferences,
 );

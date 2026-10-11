@@ -25,12 +25,46 @@ import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cach
 import { formatErrorBlock } from "../chrome/error-block";
 import { type ServedModelMismatch, ServedModelMarkerComponent } from "./served-model-marker";
 import { isReactionTarget, type ReactionSplit, type ReactionTarget, splitReaction } from "./reaction";
-import { isRowPrefix, type TranscriptStableRow, trimBlankEdges } from "../chrome/transcript-container";
+import {
+	isRowPrefix,
+	type TranscriptContainer,
+	type TranscriptStableRow,
+	trimBlankEdges,
+} from "../chrome/transcript-container";
 import { formatTurnUsage, type TurnUsageSummary } from "../overlays/usage-row";
 import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { describeTableChart, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
+import { CachedOutputBlock } from "../render/output-block";
+import { isOsc66Line, truncateToWidth, visibleWidth } from "../utils";
+import { chatTranscriptDisplayPreferences } from "./display-preferences";
+
+/**
+ * How a turn's final answer is set apart from the steps above it: `frame`
+ * boxes the whole reply; `rule` closes a reply whose head already scrolled
+ * into terminal history.
+ */
+export type FinalAnswerStyle = "frame" | "rule";
+
+/**
+ * Set `component` apart as its turn's final answer when `message` ended the
+ * turn (any stop but a tool call, an error, or an abort) and
+ * `display.answerFrame` is on. The reply is boxed while none of its rows have
+ * reached terminal scrollback; a long reply whose head already scrolled out
+ * gets a closing rule instead, since emitted rows can never be repainted.
+ * Shared by the live `message_end` path and transcript rebuilds; a component
+ * already marked (one a rebuild reuses) keeps the style it was given.
+ */
+export function markFinalAnswer(
+	container: TranscriptContainer,
+	component: AssistantMessageComponent,
+	message: AssistantMessage,
+): void {
+	if (!chatTranscriptDisplayPreferences.answerFrame || component.finalAnswer !== undefined) return;
+	if (message.stopReason !== "stop" && message.stopReason !== "length") return;
+	component.setFinalAnswer(container.resetBlockStableRows(component) ? "frame" : "rule");
+}
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -293,6 +327,12 @@ export class AssistantMessageComponent extends Container {
 	/** The turn's totals when this answer ends it; a TSP terminal shows them under the answer. */
 	#turnUsage: TurnUsageSummary | undefined;
 	/**
+	 * How this answer is set apart as the final message of its turn (see
+	 * {@link setFinalAnswer}); undefined renders it like any other step.
+	 */
+	#finalAnswer: FinalAnswerStyle | undefined;
+	readonly #answerBlock = new CachedOutputBlock();
+	/**
 	 * True when the current {@link updateContent} message carries a truncatable
 	 * inline provider error (the `#appendErrorBlock` path) — set whether or not
 	 * the inline block was actually drawn, so it stays true even while the error
@@ -537,10 +577,32 @@ export class AssistantMessageComponent extends Container {
 		this.#refreshMarkers();
 	}
 
-	/** Mark this answer as the end of a turn with the turn's totals (native only: ANSI keeps them in the status line). */
+	/** Mark this answer as the end of a turn with the turn's totals (shown in the answer frame title and by the native view). */
 	setTurnUsage(summary: TurnUsageSummary | undefined): void {
 		this.#turnUsage = summary;
 		this.#nativeViewVersion++;
+		if (this.#finalAnswer) this.#blockVersion++;
+	}
+
+	/**
+	 * Set this answer apart as the turn's final message so it reads apart from
+	 * the steps logged above it. `frame` draws an accent box titled `✓ Answer`
+	 * (with the turn's totals) on a lighter `customMessageBg` fill around the
+	 * reply; it changes every row, so the
+	 * host passes it only while none of the block's rows have reached terminal
+	 * scrollback. `rule` closes an answer whose head already scrolled into
+	 * history with an accent rule under it, leaving the emitted rows untouched.
+	 * A reply with no prose (thinking only, an error) stays unmarked.
+	 */
+	setFinalAnswer(style: FinalAnswerStyle | undefined): void {
+		if (this.#finalAnswer === style) return;
+		this.#finalAnswer = style;
+		this.#blockVersion++;
+	}
+
+	/** How this answer is set apart as its turn's final message, if at all. */
+	get finalAnswer(): FinalAnswerStyle | undefined {
+		return this.#finalAnswer;
 	}
 
 	/**
@@ -562,6 +624,7 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.#answerBlock.invalidate();
 		// Theme/symbol changes arrive via invalidate(). Fast-path children captured
 		// their theme at construction, so drop them and force the teardown path to
 		// rebuild with the current theme. Streaming updates call updateContent()
@@ -759,9 +822,62 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		const style = this.#emergencyText ? this.#finalAnswer : undefined;
+		if (style === "frame") return this.#renderAnswerFrame(width);
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
+		if (style === "rule") return [...rows, this.#renderAnswerRule(width)];
 		return rows;
+	}
+
+	/** `✓ Answer` and, when known, the turn's totals: the title of the final-answer frame and rule. */
+	#answerTitle(): { label: string; meta: string | undefined } {
+		const label = `${theme.styledSymbol("status.success", "success")} ${theme.bold(theme.fg("accent", "Answer"))}`;
+		const meta = this.#turnUsage ? theme.fg("dim", formatTurnUsage(this.#turnUsage).text) : undefined;
+		return { label, meta };
+	}
+
+	/**
+	 * The reply inside an accent box titled with {@link #answerTitle}, filled
+	 * with `customMessageBg` so it reads lighter than the terminal, the prompt
+	 * band, and tool output; trailing markers stay below it. A reply holding
+	 * rows that must reach the terminal raw — images, figures, charts, OSC 66
+	 * sized headings — keeps those rows unboxed and takes the closing rule
+	 * instead. Either way the content renders once, at the frame's inner width,
+	 * so width-tracking children (figures, SIXEL encodes) never flip between
+	 * two sizes from one pass to the next.
+	 */
+	#renderAnswerFrame(width: number): readonly string[] {
+		// Prose children carry their own one-column side padding, so the frame adds none.
+		const content = trimBlankEdges(this.#contentContainer.render(Math.max(1, width - 2)));
+		const markers = this.#markerSlot.render(width);
+		if (content.some(row => TERMINAL.isImageLine(row) || isOsc66Line(row))) {
+			return [...content, ...markers, this.#renderAnswerRule(width)];
+		}
+		const { label, meta } = this.#answerTitle();
+		const framed = this.#answerBlock.render(
+			{
+				header: label,
+				headerMeta: meta,
+				sections: [{ lines: content }],
+				width,
+				borderColor: "accent",
+				fill: "customMessageBg",
+				contentPaddingLeft: 0,
+			},
+			theme,
+		);
+		return markers.length > 0 ? [...framed, ...markers] : framed;
+	}
+
+	/** An accent rule closing an answer whose head already scrolled into terminal history. */
+	#renderAnswerRule(width: number): string {
+		const { label, meta } = this.#answerTitle();
+		const h = theme.boxRound.horizontal;
+		const title = ` ${[`${label} ${theme.fg("dim", "↑")}`, meta].filter(Boolean).join(theme.fg("dim", theme.sep.dot))} `;
+		const lead = theme.fg("accent", h.repeat(3));
+		const fill = Math.max(0, width - visibleWidth(lead) - visibleWidth(title));
+		return truncateToWidth(`${lead}${title}${theme.fg("accent", h.repeat(fill))}`, width);
 	}
 
 	/**

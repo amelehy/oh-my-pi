@@ -16,6 +16,10 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatUsageRow } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -28,6 +32,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Container, type TUI } from "@oh-my-pi/pi-tui";
+import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -274,7 +279,7 @@ describe("UiHelpers.renderSessionContext turn elapsed", () => {
 
 	function makeHarness(turnTimeOn: boolean): { ctx: InteractiveModeContext; helpers: UiHelpers } {
 		const ctx = {
-			chatContainer: new Container(),
+			chatContainer: new TranscriptContainer(),
 			transcriptMessageComponents: new WeakMap(),
 			pendingTools: new Map(),
 			ui: { requestRender: vi.fn() },
@@ -285,6 +290,7 @@ describe("UiHelpers.renderSessionContext turn elapsed", () => {
 			session: {
 				retryAttempt: 0,
 				getToolByName: () => undefined,
+				hasBuiltInTool: () => true,
 				sessionManager: { getCwd: () => process.cwd(), putBlobSync: () => undefined },
 			},
 			get viewSession() {
@@ -310,6 +316,54 @@ describe("UiHelpers.renderSessionContext turn elapsed", () => {
 		const { ctx, helpers } = makeHarness(false);
 		helpers.renderSessionContext({ messages: [userMessage(), assistantMessage()] } as SessionContext);
 		expect(renderedText(ctx.chatContainer)).not.toContain(TURN_ELAPSED_LABEL);
+	});
+
+	it("frames a rebuilt turn's final answer with the turn's totals and leaves its tool-call step plain", async () => {
+		// Tool-call cards read process-wide settings; answer framing reads the synced display preference.
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+		const initial = chatTranscriptDisplayPreferences.answerFrame;
+		setChatTranscriptDisplayPreferences({ answerFrame: true });
+		try {
+			const { ctx, helpers } = makeHarness(false);
+			const step = assistantMessage({
+				content: [
+					{ type: "text", text: "checking first" },
+					{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "true" } },
+				],
+				stopReason: "toolUse",
+			} as Partial<AssistantFixture>);
+			const result = {
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "bash",
+				content: [{ type: "text", text: "ok" }],
+				isError: false,
+				timestamp: PROMPT_AT + 1,
+			} as unknown as AgentMessage;
+			helpers.renderSessionContext({
+				messages: [
+					userMessage(),
+					step,
+					result,
+					assistantMessage({ content: [{ type: "text", text: "all done" }] }),
+				],
+			} as SessionContext);
+			const rows = Bun.stripANSI(
+				ctx.chatContainer.children.map(child => child.render(120).join("\n")).join("\n"),
+			).split("\n");
+			const title = rows.findIndex(row => row.includes("Answer"));
+			expect(title).toBeGreaterThanOrEqual(0);
+			expect(rows[title]).toStartWith(theme.boxRound.topLeft);
+			// Turn totals: 60s prompt→yield, both requests' tokens.
+			expect(rows[title]).toContain("1m");
+			expect(rows[title]).toContain("8.5K tok");
+			expect(rows.slice(title).some(row => row.includes("all done"))).toBe(true);
+			expect(rows.slice(0, title).some(row => row.includes("checking first"))).toBe(true);
+			expect(rows.filter(row => row.includes("Answer"))).toHaveLength(1);
+		} finally {
+			setChatTranscriptDisplayPreferences({ answerFrame: initial });
+			resetSettingsForTest();
+		}
 	});
 });
 

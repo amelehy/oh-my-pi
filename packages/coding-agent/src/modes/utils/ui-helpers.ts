@@ -12,7 +12,7 @@ import { InternalUrlRouter } from "../../internal-urls";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { AssistantMessageComponent, markFinalAnswer } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -42,7 +42,7 @@ import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entr
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import { ToolExecutionComponent, type ToolExecutionHandle, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptBlock, TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
+import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
 import {
@@ -492,6 +492,8 @@ export class UiHelpers {
 		let pendingReadUsageCallIds: string[] | undefined;
 		let pendingUsageTurnElapsed: number | undefined;
 		let turnStartedAt: number | undefined;
+		// The turn's totals for its final answer's frame title, mirroring the live message_end tally.
+		const turnUsage = new TurnUsageTally();
 		const flushPendingUsage = () => {
 			if (!pendingUsage) return;
 			const usageAttached =
@@ -584,6 +586,11 @@ export class UiHelpers {
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				const timeline = splitAssistantMessageToolTimeline(message);
+				// A compaction rebuild reuses the live component, whose turn totals came
+				// from the full live turn; a collapsed transcript can only re-tally a suffix.
+				const reused = options.reuseSettledComponents
+					? this.ctx.transcriptMessageComponents.get(message)
+					: undefined;
 				this.ctx.addMessageToChat(message, { reuseSettledComponent: options.reuseSettledComponents });
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
@@ -609,6 +616,7 @@ export class UiHelpers {
 				const errorPresentation = resolveAssistantErrorPresentation(message, this.ctx.viewSession.retryAttempt);
 				const hasErrorStop = errorPresentation.kind === "full";
 				const errorMessage = hasErrorStop ? errorPresentation.text : null;
+				let lastAssistantComponent = assistantComponent;
 				const appendAssistantSegment = (segment: AssistantMessage | undefined) => {
 					if (!segment || !assistantHasVisibleContent(segment)) return;
 					const component = createAssistantMessageComponent(
@@ -617,6 +625,7 @@ export class UiHelpers {
 						getAssistantMessageLinkTargets(this.ctx),
 					);
 					this.ctx.chatContainer.addChild(component);
+					lastAssistantComponent = component;
 				};
 
 				// Render tool call components
@@ -716,6 +725,13 @@ export class UiHelpers {
 						this.ctx.pendingTools.set(content.id, component);
 					}
 					appendAssistantSegment(afterToolSegment);
+				}
+				// Same final-answer marking as the live message_end path, so resume,
+				// redraws and setting toggles keep the turn's answer framed.
+				const summary = turnUsage.add(message, turnStartedAt);
+				if (lastAssistantComponent) {
+					if (summary && lastAssistantComponent !== reused) lastAssistantComponent.setTurnUsage(summary);
+					markFinalAnswer(this.ctx.chatContainer, lastAssistantComponent, message);
 				}
 				// Dangling toolCalls (no result on the resolved path — failed or
 				// retried turns, results on sibling branches) were stripped by the
@@ -836,13 +852,17 @@ export class UiHelpers {
 				if (message.role === "user") resolveTodoSnapshot();
 				// Only genuinely user-attributed prompts anchor the delta; a mid-run
 				// agent-attributed `user` message (advisor tool-loop redirect) must not.
-				if (message.role === "user" && message.attribution !== "agent") turnStartedAt = message.timestamp;
+				if (message.role === "user" && message.attribution !== "agent") {
+					turnStartedAt = message.timestamp;
+					turnUsage.reset();
+				}
 				// A synthetic developer message initiates a fresh run (auto-continue,
 				// /goal, approved plan): replay must not inherit the preceding user
 				// prompt's timestamp, mirroring the live agent_start clear. Same-turn
 				// continuation reminders (todo, plan) are persisted developer messages
 				// WITHOUT the synthetic marker, so their anchor survives the rebuild.
 				if (message.role === "developer" && message.synthetic) {
+					turnUsage.reset();
 					// A deliberate operator action (`.`, `c` continue shortcut) is the
 					// turn's own prompt: anchor the delta to it instead of clearing.
 					if (message.userInitiated) turnStartedAt = message.timestamp;
@@ -850,6 +870,7 @@ export class UiHelpers {
 				}
 				if (message.role === "custom" && isUserTurnInitiator(message as CustomMessage)) {
 					turnStartedAt = message.timestamp;
+					turnUsage.reset();
 				}
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, { reuseSettledComponent: options.reuseSettledComponents });

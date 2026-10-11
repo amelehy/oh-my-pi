@@ -698,8 +698,8 @@ describe("Agent hub row ordering", () => {
 		try {
 			const rendered = Bun.stripANSI(hub.render(140).join("\n"));
 			expect(rendered).toContain("1 running");
+			expect(rendered).toContain("Tree");
 			expect(rendered).toContain("Flat");
-			expect(rendered).toContain("By parent");
 			expect(rendered).toContain("$0.213 · 2m14s active · 12 req · 27 tools · 18K tok");
 			expect(rendered).toContain("read · src/session/agent-session.ts");
 			expect(rendered).toContain("31K/128K 24%");
@@ -966,7 +966,7 @@ describe("Agent hub row ordering", () => {
 			hub.dispose();
 		}
 	});
-	it("switches between inline Flat and By parent projections with selection preserved", () => {
+	it("opens on the agent tree and switches to the flat roster with selection preserved", () => {
 		vi.useFakeTimers();
 		geometry = stubStdoutGeometry(120);
 		const agents = new AgentRegistry();
@@ -979,27 +979,23 @@ describe("Agent hub row ordering", () => {
 		const hub = makeHub(agents);
 
 		try {
+			const treeIds = renderedAgentIds(hub);
+			expect(treeIds).toEqual(["Parent", "Child", "Peer"]);
+			expect(selectedAgentId(hub)).toBe("Parent");
+			const tree = Bun.stripANSI(hub.render(120).join("\n"));
+			expect(tree).toContain("Tree");
+			expect(tree).toContain("Flat");
+
+			hub.handleInput("j");
+			expect(selectedAgentId(hub)).toBe("Child");
+			hub.handleInput("t");
 			expect(renderedAgentIds(hub)).toEqual(["Child", "Peer", "Parent"]);
 			expect(selectedAgentId(hub)).toBe("Child");
-			const flat = Bun.stripANSI(hub.render(120).join("\n"));
-			expect(flat).toContain("Flat");
-			expect(flat).toContain("By parent");
-
 			hub.setHoverIndex(0);
 			expect(renderedRosterHeaderLineRaw(hub, "Child", 120)).toContain(theme.getBgAnsi("selectedBg"));
-			hub.handleInput("t");
-			const byParentIds = renderedAgentIds(hub);
-			expect(byParentIds).toEqual(["Parent", "Child", "Peer"]);
-			expect(selectedAgentId(hub)).toBe("Child");
-			const byParent = Bun.stripANSI(hub.render(120).join("\n"));
-			expect(byParent).toContain("Flat");
-			expect(byParent).toContain("By parent");
-			expect(byParentIds.indexOf("Parent")).toBeLessThan(byParentIds.indexOf("Child"));
-			expect(renderedRosterHeaderLineRaw(hub, "Parent", 120)).not.toContain(theme.getBgAnsi("selectedBg"));
-			expect(renderedRosterHeaderLineRaw(hub, "Child", 120)).not.toContain(theme.getBgAnsi("selectedBg"));
 
 			hub.handleInput("t");
-			expect(renderedAgentIds(hub)).toEqual(["Child", "Peer", "Parent"]);
+			expect(renderedAgentIds(hub)).toEqual(["Parent", "Child", "Peer"]);
 			expect(selectedAgentId(hub)).toBe("Child");
 		} finally {
 			hub.dispose();
@@ -1022,7 +1018,7 @@ describe("Agent hub row ordering", () => {
 		const hub = makeHub(agents);
 
 		try {
-			hub.handleInput("t");
+			// The hub opens on the agent tree.
 			expect(renderedAgentIds(hub)).toEqual(["P2", "P1", "C0"]);
 			expect(selectedAgentId(hub)).toBe("P2");
 
@@ -1064,7 +1060,7 @@ describe("Agent hub row ordering", () => {
 		const hub = makeHub(agents);
 
 		try {
-			hub.handleInput("t");
+			// The hub opens on the agent tree.
 			expect(Bun.stripANSI(renderedRosterHeaderLineRaw(hub, "First", 120))).toContain("├── ⟳ First");
 			expect(Bun.stripANSI(renderedRosterHeaderLineRaw(hub, "Grandchild", 120))).toContain("│   └── ⟳ Grandchild");
 			expect(Bun.stripANSI(renderedRosterHeaderLineRaw(hub, "Last", 120))).toContain("└── ⟳ Last");
@@ -1089,7 +1085,7 @@ describe("Agent hub row ordering", () => {
 		const hub = makeHub(agents);
 
 		try {
-			hub.handleInput("t");
+			// The hub opens on the agent tree.
 			const parentDetails = renderedRosterEntry(hub, "Parent", 120).split("\n").slice(1);
 			const firstDetails = renderedRosterEntry(hub, "First", 120).split("\n").slice(1);
 			const grandchildDetails = renderedRosterEntry(hub, "Grandchild", 120).split("\n").slice(1);

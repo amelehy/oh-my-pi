@@ -302,10 +302,15 @@ class LazyWorkerHandle implements WorkerHandle {
 
 // ── Worker discovery / spawn ─────────────────────────────────────────
 
-type ProbeResult = { kind: "live"; socket: net.Socket } | { kind: "stale" } | { kind: "absent" };
+type ProbeResult = { kind: "live"; socket: net.Socket } | { kind: "stale" } | { kind: "busy" } | { kind: "absent" };
 
-/** Connect and ping. `stale` means a worker answered with a different launch tag (and was told to shut down). */
+/**
+ * Connect and ping. `stale` means a worker answered with a different launch tag (and was told to shut down);
+ * `busy` means a worker accepted the connection but sent no pong within the probe timeout (typically stuck in a
+ * synchronous ONNX run); `absent` means nothing is listening or the connection dropped.
+ */
 async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResult> {
+	let closed = false;
 	let socket: net.Socket | undefined;
 	try {
 		socket = await connectJsonlSocket(endpoint, CONNECT_TIMEOUT_MS);
@@ -313,7 +318,10 @@ async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResu
 		const parser = new LineParser(line => pong.resolve(JSON.parse(line) as TinyWorkerResponse));
 		const onData = (chunk: string): void => parser.push(chunk);
 		socket.on("data", onData);
-		socket.once("close", () => pong.resolve(null));
+		socket.once("close", () => {
+			closed = true;
+			pong.resolve(null);
+		});
 		const timer = setTimeout(() => pong.resolve(null), PROBE_TIMEOUT_MS);
 		writeJsonLine(socket, { type: "ping", id: "probe" } satisfies TinyWorkerRequest);
 		const reply = await pong.promise;
@@ -334,7 +342,7 @@ async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResu
 		// Not listening (or refused); the caller spawns one.
 	}
 	socket?.destroy();
-	return { kind: "absent" };
+	return { kind: socket && !closed ? "busy" : "absent" };
 }
 
 interface SpawnedWorker {
@@ -476,7 +484,7 @@ export async function connectTinyWorker(
 	const probed = await probeTinyWorker(endpoint, launch.tag);
 	if (probed.kind === "live") return createSocketWorkerHandle(probed.socket, logPath);
 	if (probed.kind === "stale") await waitForEndpointRelease(endpoint);
-	const spawned = await launch.spawn(endpoint, logPath);
+	let spawned = await launch.spawn(endpoint, logPath);
 	const deadline = Date.now() + READY_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		const result = await probeTinyWorker(endpoint, launch.tag);
@@ -485,14 +493,29 @@ export async function connectTinyWorker(
 			// Our child is gone: either it lost the bind race to a sibling omp
 			// (already adopted above if so) or it crashed.
 			const tail = await logTail(spawned.logPath);
-			throw new Error(
-				`tiny ${launch.backend} worker for ${modelKey} exited with code ${spawned.proc.exitCode}${tail ? `: ${tail}` : ""}`,
-			);
+			if (!tail.includes("already listening")) {
+				throw new Error(
+					`tiny ${launch.backend} worker for ${modelKey} exited with code ${spawned.proc.exitCode}${tail ? `: ${tail}` : ""}`,
+				);
+			}
+			// The loser's sibling holds the socket. One inside a synchronous ONNX
+			// run accepts connections but cannot answer the probe until the run
+			// returns ("busy"): keep waiting. A sibling that answered with another
+			// launch tag was told to shut down, and one that vanished leaves nothing
+			// bound: in both cases spawn again.
+			if (result.kind === "stale") await waitForEndpointRelease(endpoint);
+			if (result.kind !== "busy") {
+				spawned = await launch.spawn(endpoint, logPath);
+				continue;
+			}
 		}
 		await Bun.sleep(PROBE_INTERVAL_MS);
 	}
+	const busy = spawned.proc.exitCode !== null && (await logTail(spawned.logPath)).includes("already listening");
 	throw new Error(
-		`tiny ${launch.backend} worker for ${modelKey} did not bind ${endpoint} within ${READY_TIMEOUT_MS}ms`,
+		busy
+			? `tiny ${launch.backend} worker for ${modelKey} is busy and did not answer ${endpoint} within ${READY_TIMEOUT_MS}ms`
+			: `tiny ${launch.backend} worker for ${modelKey} did not bind ${endpoint} within ${READY_TIMEOUT_MS}ms`,
 	);
 }
 

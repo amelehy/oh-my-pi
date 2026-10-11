@@ -246,6 +246,40 @@ describe("TranscriptContainer", () => {
 		expect(transcript.peekFinalizedBatch(80, 0)?.rows).toEqual(["two", ""]);
 	});
 
+	it("lets a block re-present published rows that never reached history", () => {
+		class RepresentingBlock extends AppendBlock {
+			presented: string[] | undefined;
+			override render(): readonly string[] {
+				return this.presented ?? super.render();
+			}
+		}
+		const transcript = new TranscriptContainer();
+		const block = new RepresentingBlock(["one", "two"], ["one"]);
+		transcript.addChild(block);
+		expect(transcript.renderViewport(80, 3, frame)).toEqual(["one", "two"]);
+
+		// Nothing was emitted, so the retraction is honored instead of freezing:
+		// the boxed presentation renders and its own publications keep retiring
+		// mid-stream (a frozen block would offer nothing until finalized).
+		expect(transcript.resetBlockStableRows(block)).toBe(true);
+		block.presented = ["╭ one", "│ two", "╰"];
+		block.publish(["╭ one"]);
+		expect(transcript.renderViewport(80, 2, frame)).toEqual(["│ two", "╰"]);
+		expect(transcript.peekFinalizedBatch(80, 2)?.rows).toEqual(["╭ one"]);
+	});
+
+	it("refuses to re-present a block once any of its rows reached history", () => {
+		const transcript = new TranscriptContainer();
+		const block = new AppendBlock(["one", "two"], ["one"]);
+		transcript.addChild(block);
+		transcript.renderViewport(80, 2, frame);
+		const emitted = transcript.peekFinalizedBatch(80, 0)!;
+		transcript.acknowledgeFinalizedBatch(emitted.id);
+
+		expect(transcript.resetBlockStableRows(block)).toBe(false);
+		expect(block.getTranscriptStableRows()).toEqual([literalStableRow("one")]);
+	});
+
 	it("freezes same-length drift in a reused render buffer without changing emitted history", () => {
 		const transcript = new TranscriptContainer();
 		const stableRender = ["one"];

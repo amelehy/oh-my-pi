@@ -6,6 +6,8 @@ export interface ChatTranscriptDisplayPreferences {
 	cacheMissMarker: boolean;
 	showTokenUsage: boolean;
 	showTurnTime: boolean;
+	/** Box each turn's final answer so it stands apart from the steps above it. */
+	answerFrame: boolean;
 }
 
 /** Current transcript display preferences. */
@@ -16,6 +18,7 @@ export const chatTranscriptDisplayPreferences: ChatTranscriptDisplayPreferences 
 	cacheMissMarker: false,
 	showTokenUsage: false,
 	showTurnTime: false,
+	answerFrame: false,
 };
 
 /** Apply host display preferences without pulling settings into the renderer. */

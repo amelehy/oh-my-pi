@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { TtyWriter } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
+import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils/loop-phase";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { restoreTerminalStderr, suppressTerminalStderr } from "@oh-my-pi/pi-utils/stderr-guard";
 import { TSP_VERSION } from "@oh-my-pi/pi-wire";
@@ -27,8 +28,10 @@ import {
 	setTerminalGlyphProtocol,
 	TERMINAL,
 } from "./terminal-capabilities";
+import { tmuxMultiplexer } from "./multiplexers/tmux";
 import type { TerminalMultiplexerBackgroundColorCache } from "./multiplexers/types";
 import { terminalMultiplexerSessions } from "./terminal-multiplexer";
+import { setTmuxPaneApcTitles, tmuxSessionSpeaksTsp } from "./tmux";
 import { setHangulCompatibilityJamoWidth } from "./utils";
 import { translateWindowsAltGrSequence } from "./windows-altgr";
 import { Win32InputModeDecoder, Win32PasteMarkerNormalizer } from "./windows-input-mode";
@@ -48,6 +51,9 @@ const WIN32_RELAYED_ESCAPE_TIMEOUT_MS = 75;
  * `ESC ] 877 ; tsp;… ESC \` there instead of `ESC _ tsp;… ESC \`.
  */
 const TSP_OSC_PREFIX = `\x1b]877;${TSP_PREFIX.slice(2)}`;
+
+/** How long a TSP hello waits for its reply inside tmux, which answers DA1 itself. */
+const TSP_TMUX_HELLO_TIMEOUT_MS = 1000;
 
 /**
  * The TSP message a reassembled input string holds, in APC form, or
@@ -655,6 +661,12 @@ export interface Terminal {
 	 */
 	onPrivateModeReport?(callback: PrivateModeReportHandler): void;
 	/**
+	 * Report whether DA1 advertises SIXEL (attribute 4), replaying the latest
+	 * advertisement to late subscribers. A missing attribute does not rule out
+	 * support discovered through another graphics query.
+	 */
+	onSixelSupport?(callback: (supported: boolean) => void): void;
+	/**
 	 * Register a callback fired once the startup Glyph Protocol handshake
 	 * resolves (see {@link GlyphProtocolReportHandler}). A subscriber that
 	 * arrives after the handshake already resolved is called immediately with
@@ -862,9 +874,15 @@ export class ProcessTerminal implements Terminal {
 	#glyphProtocolReplyBuffer = "";
 	#glyphProtocolResult: boolean | undefined;
 	#glyphProtocolCallbacks: GlyphProtocolReportHandler[] = [];
+	#sixelSupport: boolean | undefined;
+	#sixelSupportCallbacks: Array<(supported: boolean) => void> = [];
 	#tspPending = false;
 	#tspResult: TspHello | null | undefined;
 	#tspCallbacks: TspHelloHandler[] = [];
+	/** Hello deadline inside tmux, where no DA1 sentinel can end the probe. */
+	#tspTimeout: NodeJS.Timeout | undefined;
+	/** This tmux pane's APC titles are off for TSP and must be restored. */
+	#tspTmuxPaneGated = false;
 	#tspReplyBuffer = "";
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
@@ -979,6 +997,11 @@ export class ProcessTerminal implements Terminal {
 		// The handshake runs from enableInput(), which can precede the host's
 		// subscription during startup; replay so the outcome is never missed.
 		if (this.#glyphProtocolResult !== undefined) callback(this.#glyphProtocolResult);
+	}
+
+	onSixelSupport(callback: (supported: boolean) => void): void {
+		this.#sixelSupportCallbacks.push(callback);
+		if (this.#sixelSupport !== undefined) callback(this.#sixelSupport);
 	}
 
 	onTspHello(callback: TspHelloHandler): void {
@@ -1265,6 +1288,7 @@ export class ProcessTerminal implements Terminal {
 
 		// DA1 (Primary Device Attributes) response: \x1b[?...c
 		const da1ResponsePattern = /^\x1b\[\?[\d;]*c$/;
+		const da1SixelAttributePattern = /;4(?:;|c$)/u;
 
 		// Private CSI partial: \x1b[?<digits/semicolons>... — incomplete probe response
 		// that the StdinBuffer flushed before the terminator arrived (split across
@@ -1408,6 +1432,19 @@ export class ProcessTerminal implements Terminal {
 			// outstanding sentinel — a reply that arrives after the FIFO drains (slow
 			// SSH/PTY links) must never reach the composer as literal text (#8542).
 			if (da1ResponsePattern.test(sequence)) {
+				// Publish graphics support without forwarding DA1 bytes to application
+				// input or changing ownership of the existing probe sentinel.
+				const supportsSixel = da1SixelAttributePattern.test(sequence);
+				if (supportsSixel !== this.#sixelSupport) {
+					this.#sixelSupport = supportsSixel;
+					for (const callback of this.#sixelSupportCallbacks) {
+						try {
+							callback(supportsSixel);
+						} catch {
+							// Capability subscribers must not interrupt sentinel handling.
+						}
+					}
+				}
 				const owner = this.#da1SentinelOwners.shift();
 				if (!owner) {
 					// Late/unowned reply: nothing to resolve, just drop the bytes.
@@ -1803,6 +1840,9 @@ export class ProcessTerminal implements Terminal {
 	#shouldQueryTspSupport(): boolean {
 		const override = $env.PI_TUI_NATIVE;
 		if (override === "0") return false;
+		// tmux makes APC bodies the pane title unless the hosting terminal asked
+		// for TSP through `@tern-tsp`: no override may force the probe there.
+		if (tmuxMultiplexer.isInside($env)) return tmuxSessionSpeaksTsp($env);
 		if (override === "1") return true;
 		// Multiplexers swallow APC, so the reply could never arrive.
 		if (isInsideTerminalMultiplexer($env)) return false;
@@ -1820,8 +1860,28 @@ export class ProcessTerminal implements Terminal {
 			return;
 		}
 		this.#tspPending = true;
+		if (tmuxMultiplexer.isInside($env)) {
+			// tmux answers DA1 itself, ahead of any reply: wait for the reply instead.
+			this.#tspTmuxPaneGated = true;
+			setTmuxPaneApcTitles(false, $env);
+			this.#tspTimeout = setTimeout(() => {
+				this.#tspTimeout = undefined;
+				this.#resolveTspSupport(null);
+			}, TSP_TMUX_HELLO_TIMEOUT_MS);
+			this.#safeWrite(encodeTspHelloQuery());
+			return;
+		}
 		this.#da1SentinelOwners.push({ kind: "tsp" });
 		this.#safeWrite(`${encodeTspHelloQuery()}\x1b[c`);
+	}
+
+	/** Hand APC titles back to tmux once this pane stops speaking TSP. */
+	#endTspTmuxPane(): void {
+		clearTimeout(this.#tspTimeout);
+		this.#tspTimeout = undefined;
+		if (!this.#tspTmuxPaneGated) return;
+		this.#tspTmuxPaneGated = false;
+		setTmuxPaneApcTitles(true, $env);
 	}
 
 	#handleTspMessage(sequence: string): void {
@@ -1839,6 +1899,12 @@ export class ProcessTerminal implements Terminal {
 		this.#tspPending = false;
 		const result = hello !== null && hello.v === TSP_VERSION ? hello : null;
 		if (hello !== null && result === null) logger.warn("TSP: unsupported protocol version", { v: hello.v });
+		if (result === null) {
+			this.#endTspTmuxPane();
+		} else {
+			clearTimeout(this.#tspTimeout);
+			this.#tspTimeout = undefined;
+		}
 		this.#tspResult = result;
 		for (const cb of this.#tspCallbacks) {
 			try {
@@ -2223,8 +2289,11 @@ export class ProcessTerminal implements Terminal {
 		this.#glyphProtocolResult = undefined;
 		this.#glyphProtocolReplyBuffer = "";
 		this.#glyphProtocolCallbacks = [];
+		this.#sixelSupport = undefined;
+		this.#sixelSupportCallbacks = [];
 		setTerminalGlyphProtocol(false);
 		this.#tspPending = false;
+		this.#endTspTmuxPane();
 		this.#tspResult = undefined;
 		this.#tspReplyBuffer = "";
 		this.#tspCallbacks = [];
@@ -2394,11 +2463,14 @@ export class ProcessTerminal implements Terminal {
 			this.#trackStdoutBacklog(pending);
 			return;
 		}
-		// A console-sharing child process may have flipped the console codepage
-		// away from UTF-8; repair it before any bytes hit WriteFile so no frame
-		// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
-		if (process.platform === "win32") ensureWindowsConsoleUtf8();
+		// Without the pump, writes (and the codepage guard's console calls) block
+		// the event loop until the terminal drains; label them for the watchdog.
+		pushLoopPhase("ui.terminal-write");
 		try {
+			// A console-sharing child process may have flipped the console codepage
+			// away from UTF-8; repair it before any bytes hit WriteFile so no frame
+			// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
+			if (process.platform === "win32") ensureWindowsConsoleUtf8();
 			// Windows ConPTY drops viewport tracking when a single write exceeds
 			// ~32-64 KB: the host UI's scroll position stays parked at wherever
 			// the write began, even though every byte landed in scrollback. Split
@@ -2427,6 +2499,8 @@ export class ProcessTerminal implements Terminal {
 			this.#trackStdoutBacklog(process.stdout.writableLength ?? 0);
 		} catch (err) {
 			this.#markTerminalDisconnected("stdout failed", err);
+		} finally {
+			popLoopPhase();
 		}
 	}
 

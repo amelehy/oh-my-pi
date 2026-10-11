@@ -2,9 +2,37 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ChildProcess.kill()` silently leaving the child running when the native process handle could not be resolved or used; it now signals the child directly and escalates to SIGKILL after the grace period.
+
+## [18.9.2] - 2026-10-11
+
 ### Changed
 
-- Sped up streaming JSON string scanning for long tool-argument payloads by bulk-skipping ordinary characters ([#14297](https://github.com/can1357/oh-my-pi/pull/14297) by [@abilliontokens](https://github.com/abilliontokens)).
+- Improved streaming JSON parsing performance for tool arguments containing many string values.
+
+### Fixed
+
+- Fixed parsing of long strings that contain closing delimiters other than double or single quotes.
+
+## [18.9.0] - 2026-10-11
+
+### Breaking Changes
+
+- Renamed `takeRecentLoopPhase()` to `takeLoopPhaseAttribution()`. The new API returns a `LoopPhaseAttribution` object (`{ label, ms }`) and reports a label only when it accounts for more time than unlabeled work within an armed measurement window.
+
+### Added
+
+- Added `withLoopPhase(label, fn)` for attributing synchronous work to a named loop phase, with automatic cleanup even when the callback throws.
+
+### Changed
+
+- Improved streaming JSON parsing performance for long tool-argument payloads.
+
+### Fixed
+
+- Fixed archive extraction on Windows systems without symlink privileges by allowing symlink entries to be extracted using supported fallbacks, while skipping unresolvable dangling links instead of failing the entire archive.
 
 ## [18.8.9] - 2026-10-10
 

@@ -577,7 +577,7 @@ export class AssistantMessageComponent extends Container {
 		this.#refreshMarkers();
 	}
 
-	/** Mark this answer as the end of a turn with the turn's totals (native only: ANSI keeps them in the status line). */
+	/** Mark this answer as the end of a turn with the turn's totals (shown in the answer frame title and by the native view). */
 	setTurnUsage(summary: TurnUsageSummary | undefined): void {
 		this.#turnUsage = summary;
 		this.#nativeViewVersion++;

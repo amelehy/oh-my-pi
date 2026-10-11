@@ -13,6 +13,11 @@
 - The pinned `Subagents` jump list is now a live agent tree: subagents nest under the agent that spawned them, each row shows an animated status (running, done, failed, aborted), what the agent is doing right now, and its active time and spend, and the header counts each outcome with the wave's total spend and the Agent Hub key. Finished agents stay listed with their outcome while the rest of their wave runs; collapsed, the tree keeps running agents (and the agents above them) and failures first, and the expander names what it hides
 - `display.subagentLivePreview` (the per-agent activity row) is now on by default
 
+### Fixed
+
+- Fixed local ONNX tiny models (Qwen2.5 1.5B) failing with a Gather index error on prompts longer than the model's position table: the worker now keeps the tail of an over-long prompt and leaves room for the generated tokens
+- Fixed a tiny-model worker that was busy inside an ONNX run being reported as a failed start: the loser of the bind race now waits for it, and respawns if the sibling went away or ran a stale build
+
 ## [18.8.9] - 2026-10-10
 
 ### Added

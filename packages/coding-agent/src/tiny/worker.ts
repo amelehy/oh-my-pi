@@ -129,21 +129,35 @@ export function createStopOnTextCriteria(
  * Drop the oldest tokens when the rendered prompt would walk past the ONNX
  * rotary table. Transformers.js truncates to `tokenizer.model_max_length`
  * (131072 for Qwen2.5) and keeps the head, which both overflows the table and
- * discards the latest turn.
+ * discards the latest turn. Decoding a token-boundary cut and re-encoding can
+ * yield a few more tokens (a cut inside a multi-byte sequence, or a merge that
+ * changes without its left context), so the decoded tail is re-measured and
+ * trimmed again until it fits.
  */
 function fitPromptToPositionTable(generator: TextGenerationPipeline, promptText: string, maxNewTokens: number): string {
 	const maxPositions = generator.model.config.max_position_embeddings;
 	if (typeof maxPositions !== "number") return promptText;
 	const limit = onnxSafePromptTokens(maxPositions, maxNewTokens);
-	const ids = generator.tokenizer.encode(promptText, { add_special_tokens: false });
-	const tail = tailTokenIds(ids, limit);
-	if (tail.length === ids.length) return promptText;
+	const encode = (text: string): number[] => generator.tokenizer.encode(text, { add_special_tokens: false });
+	const initial = encode(promptText);
+	if (initial.length <= limit) return promptText;
 	logger.warn("tiny-model: prompt exceeds ONNX position table; keeping the tail", {
-		tokens: ids.length,
+		tokens: initial.length,
 		limit,
 		maxPositionEmbeddings: maxPositions,
 	});
-	return generator.tokenizer.decode(tail, { skip_special_tokens: false, clean_up_tokenization_spaces: false });
+	let text = promptText;
+	let ids = initial;
+	let budget = limit;
+	while (ids.length > limit && budget > 1) {
+		text = generator.tokenizer.decode(tailTokenIds(ids, budget), {
+			skip_special_tokens: false,
+			clean_up_tokenization_spaces: false,
+		});
+		ids = encode(text);
+		budget -= Math.max(1, ids.length - limit);
+	}
+	return text;
 }
 
 /** The worker's single ONNX model: transformers.js pipeline with the device fallback chain. */

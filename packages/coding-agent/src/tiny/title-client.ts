@@ -304,7 +304,11 @@ class LazyWorkerHandle implements WorkerHandle {
 
 type ProbeResult = { kind: "live"; socket: net.Socket } | { kind: "stale" } | { kind: "busy" } | { kind: "absent" };
 
-/** Connect and ping. `stale` means a worker answered with a different launch tag (and was told to shut down). */
+/**
+ * Connect and ping. `stale` means a worker answered with a different launch tag (and was told to shut down);
+ * `busy` means a worker accepted the connection but sent no pong within the probe timeout (typically stuck in a
+ * synchronous ONNX run); `absent` means nothing is listening or the connection dropped.
+ */
 async function probeTinyWorker(endpoint: string, tag: string): Promise<ProbeResult> {
 	let closed = false;
 	let socket: net.Socket | undefined;

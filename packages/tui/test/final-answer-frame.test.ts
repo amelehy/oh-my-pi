@@ -11,6 +11,7 @@ import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -119,11 +120,25 @@ describe("final answer frame", () => {
 		setChatTranscriptDisplayPreferences({ answerFrame: true });
 		// Stand in for a terminal image row (picture, figure, or chart) so the test runs on any terminal.
 		vi.spyOn(TERMINAL, "isImageLine").mockImplementation(line => line.includes("IMAGE-ROW"));
-		const rows = finish(reply("stop", [{ type: "text", text: "Here is the chart.\n\nIMAGE-ROW" }]));
+		const widths: number[] = [];
+		const original = Markdown.prototype.render;
+		vi.spyOn(Markdown.prototype, "render").mockImplementation(function (this: Markdown, width: number) {
+			widths.push(width);
+			return original.call(this, width);
+		});
+		const message = reply("stop", [{ type: "text", text: "Here is the chart.\n\nIMAGE-ROW" }]);
+		const container = new TranscriptContainer();
+		const component = new AssistantMessageComponent(message);
+		container.addChild(component);
+		markFinalAnswer(container, component, message);
+		const rows = component.render(60).map(row => Bun.stripANSI(row));
+		component.render(60);
 		expect(rows[0]).not.toStartWith(theme.boxRound.topLeft);
 		const imageRow = rows.find(row => row.includes("IMAGE-ROW"))!;
 		expect(imageRow).not.toContain(theme.boxRound.vertical);
 		expect(rows.at(-1)).toContain("Answer ↑");
+		// Content renders at one width every pass, so width-tracking figures never re-raster back and forth.
+		expect(new Set(widths).size).toBe(1);
 	});
 
 	it("keeps the style a reused answer was first given when a rebuild marks it again", () => {

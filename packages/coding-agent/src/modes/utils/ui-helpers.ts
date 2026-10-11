@@ -586,6 +586,11 @@ export class UiHelpers {
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				const timeline = splitAssistantMessageToolTimeline(message);
+				// A compaction rebuild reuses the live component, whose turn totals came
+				// from the full live turn; a collapsed transcript can only re-tally a suffix.
+				const reused = options.reuseSettledComponents
+					? this.ctx.transcriptMessageComponents.get(message)
+					: undefined;
 				this.ctx.addMessageToChat(message, { reuseSettledComponent: options.reuseSettledComponents });
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
@@ -725,7 +730,7 @@ export class UiHelpers {
 				// redraws and setting toggles keep the turn's answer framed.
 				const summary = turnUsage.add(message, turnStartedAt);
 				if (lastAssistantComponent) {
-					if (summary) lastAssistantComponent.setTurnUsage(summary);
+					if (summary && lastAssistantComponent !== reused) lastAssistantComponent.setTurnUsage(summary);
 					markFinalAnswer(this.ctx.chatContainer, lastAssistantComponent, message);
 				}
 				// Dangling toolCalls (no result on the resolved path — failed or

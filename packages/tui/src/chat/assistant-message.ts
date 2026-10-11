@@ -37,7 +37,7 @@ import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { describeTableChart, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
 import { CachedOutputBlock } from "../render/output-block";
-import { truncateToWidth, visibleWidth } from "../utils";
+import { isOsc66Line, truncateToWidth, visibleWidth } from "../utils";
 import { chatTranscriptDisplayPreferences } from "./display-preferences";
 
 /**
@@ -823,13 +823,10 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		const style = this.#emergencyText ? this.#finalAnswer : undefined;
-		if (style === "frame") {
-			const framed = this.#renderAnswerFrame(width);
-			if (framed) return framed;
-		}
+		if (style === "frame") return this.#renderAnswerFrame(width);
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
-		if (style) return [...rows, this.#renderAnswerRule(width)];
+		if (style === "rule") return [...rows, this.#renderAnswerRule(width)];
 		return rows;
 	}
 
@@ -843,15 +840,20 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * The reply inside an accent box titled with {@link #answerTitle}, filled
 	 * with `customMessageBg` so it reads lighter than the terminal, the prompt
-	 * band, and tool output; trailing markers stay below it. Undefined when the
-	 * reply holds image rows (pictures, figures, charts): those must reach the
-	 * terminal raw, without a border, padding, or fill, so the reply takes the
-	 * closing rule instead.
+	 * band, and tool output; trailing markers stay below it. A reply holding
+	 * rows that must reach the terminal raw — images, figures, charts, OSC 66
+	 * sized headings — keeps those rows unboxed and takes the closing rule
+	 * instead. Either way the content renders once, at the frame's inner width,
+	 * so width-tracking children (figures, SIXEL encodes) never flip between
+	 * two sizes from one pass to the next.
 	 */
-	#renderAnswerFrame(width: number): readonly string[] | undefined {
+	#renderAnswerFrame(width: number): readonly string[] {
 		// Prose children carry their own one-column side padding, so the frame adds none.
 		const content = trimBlankEdges(this.#contentContainer.render(Math.max(1, width - 2)));
-		if (content.some(row => TERMINAL.isImageLine(row))) return undefined;
+		const markers = this.#markerSlot.render(width);
+		if (content.some(row => TERMINAL.isImageLine(row) || isOsc66Line(row))) {
+			return [...content, ...markers, this.#renderAnswerRule(width)];
+		}
 		const { label, meta } = this.#answerTitle();
 		const framed = this.#answerBlock.render(
 			{
@@ -865,7 +867,6 @@ export class AssistantMessageComponent extends Container {
 			},
 			theme,
 		);
-		const markers = this.#markerSlot.render(width);
 		return markers.length > 0 ? [...framed, ...markers] : framed;
 	}
 

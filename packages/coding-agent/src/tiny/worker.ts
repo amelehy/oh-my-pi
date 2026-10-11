@@ -38,6 +38,7 @@ import {
 	type TinyLocalModelKey,
 	type TinyTitleLocalModelSpec,
 } from "./models";
+import { onnxSafePromptTokens, tailTokenIds } from "./prompt-limit";
 import {
 	TINY_WORKER_IDLE_MS,
 	TINY_WORKER_IDLE_MS_ENV,
@@ -122,6 +123,32 @@ export function createStopOnTextCriteria(
 		}
 	}
 	return new StopOnTextCriteria();
+}
+
+/**
+ * Drop the oldest tokens when the rendered prompt would walk past the ONNX
+ * rotary table. Transformers.js truncates to `tokenizer.model_max_length`
+ * (131072 for Qwen2.5) and keeps the head, which both overflows the table and
+ * discards the latest turn.
+ */
+function fitPromptToPositionTable(generator: TextGenerationPipeline, promptText: string, maxNewTokens: number): string {
+	const maxPositions = generator.model.config.max_position_embeddings;
+	if (typeof maxPositions !== "number") return promptText;
+	const limit = onnxSafePromptTokens(maxPositions, maxNewTokens);
+	const ids = generator.tokenizer.encode(promptText, {
+		add_special_tokens: false,
+	});
+	const tail = tailTokenIds(ids, limit);
+	if (tail.length === ids.length) return promptText;
+	logger.warn("tiny-model: prompt exceeds ONNX position table; keeping the tail", {
+		tokens: ids.length,
+		limit,
+		maxPositionEmbeddings: maxPositions,
+	});
+	return generator.tokenizer.decode(tail, {
+		skip_special_tokens: false,
+		clean_up_tokenization_spaces: false,
+	});
 }
 
 /** The worker's single ONNX model: transformers.js pipeline with the device fallback chain. */
@@ -227,7 +254,12 @@ class OnnxModel {
 		reply.send({
 			type: "progress",
 			id: requestId,
-			event: { modelKey: this.#modelKey, status: "ready", task: "text-generation", model: this.#spec.repo },
+			event: {
+				modelKey: this.#modelKey,
+				status: "ready",
+				task: "text-generation",
+				model: this.#spec.repo,
+			},
 		});
 	}
 
@@ -238,10 +270,11 @@ class OnnxModel {
 			enableThinking: false,
 		});
 		const promptText = request.prefill ? `${rendered}${request.prefill}` : rendered;
+		const fitted = fitPromptToPositionTable(generator, promptText, request.maxNewTokens);
 		const stoppingCriteria = request.stop
 			? createStopOnTextCriteria(await this.#loadRuntime(reply, request.id), generator.tokenizer, request.stop)
 			: undefined;
-		const output = (await generator(promptText, {
+		const output = (await generator(fitted, {
 			max_new_tokens: request.maxNewTokens,
 			do_sample: false,
 			return_full_text: false,

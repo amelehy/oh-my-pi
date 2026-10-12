@@ -26,6 +26,7 @@ import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { loadDirenvEnv } from "./direnv";
 import { buildNonInteractiveEnv } from "./non-interactive-env";
+import { acquireWarmUserShell, supportsWarmUserShell, type WarmUserShellSpec } from "./warm-user-shell";
 
 import {
 	cfgBashDirenv,
@@ -418,6 +419,26 @@ function buildUserShellCommand(shell: string, args: string[], command: string): 
 	return quotePosixArgv([shell, ...ensureInteractiveShellArgs(shell, args), command]);
 }
 
+/** Launch args for a shell that reads its commands from the tty instead of `-c`. */
+function withoutCommandArg(args: string[]): string[] {
+	return args.flatMap(arg => {
+		if (arg === "-c" || arg === "--command") return [];
+		if (!/^-[^-]*c[^-]*$/.test(arg)) return [arg];
+		const rest = arg.replace("c", "");
+		return rest === "-" ? [] : [rest];
+	});
+}
+
+function buildWarmShellSpec(
+	shell: string,
+	args: string[],
+	env: Record<string, string>,
+	cwd: string | undefined,
+	scope: string,
+): WarmUserShellSpec {
+	return { shell, args: ensureInteractiveShellArgs(shell, withoutCommandArg(args)), env, cwd, scope };
+}
+
 function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): ShellConfig {
 	const customShellPath = cfgShellPath.get(settings);
 	const envShell = Bun.env.SHELL;
@@ -464,6 +485,8 @@ async function executeUserShellPty(run: {
 	shell: string;
 	args: string[];
 	command: string;
+	/** The direnv/prefix prelude already folded into `command`; part of a warm shell's identity. */
+	scope: string;
 	cwd: string | undefined;
 	env: Record<string, string>;
 	pty: BashPtyOptions;
@@ -473,27 +496,43 @@ async function executeUserShellPty(run: {
 	graphics: TerminalGraphicsDecoder;
 	dump: (notice?: string) => Promise<OutputSummary & { images?: ImageContent[] }>;
 }): Promise<BashResult> {
-	const session = new PtySession();
-	const result = await session.startArgv(
-		{
-			application: run.shell,
-			args: [...ensureInteractiveShellArgs(run.shell, run.args), run.command],
-			cwd: run.cwd,
-			env: run.env,
-			timeoutMs: run.timeoutMs,
-			signal: run.signal,
-			cols: run.pty.cols,
-			rows: run.pty.rows,
-		},
-		(err, chunk) => {
-			if (err || !chunk) return;
-			run.pty.onChunk(chunk);
-			// Preserve raw bytes for the terminal display, but extract graphics
-			// before the transcript sink sanitizes or truncates the clean text.
-			const clean = run.graphics.push(chunk);
-			if (clean) run.sink.push(clean.replace(/\r\n?/gu, "\n"));
-		},
-	);
+	const emit = (chunk: string): void => {
+		run.pty.onChunk(chunk);
+		// Preserve raw bytes for the terminal display, but extract graphics
+		// before the transcript sink sanitizes or truncates the clean text.
+		const clean = run.graphics.push(chunk);
+		if (clean) run.sink.push(clean.replace(/\r\n?/gu, "\n"));
+	};
+	// A warm interactive shell already has the rc chain loaded; `undefined` means it never
+	// became usable, so this command falls back to a one-shot shell.
+	const warmResult = supportsWarmUserShell(shellBasename(run.shell))
+		? await acquireWarmUserShell(buildWarmShellSpec(run.shell, run.args, run.env, run.cwd, run.scope)).run({
+				command: run.command,
+				cwd: run.cwd,
+				cols: run.pty.cols,
+				rows: run.pty.rows,
+				onOutput: emit,
+				timeoutMs: run.timeoutMs,
+				signal: run.signal,
+			})
+		: undefined;
+	const result =
+		warmResult ??
+		(await new PtySession().startArgv(
+			{
+				application: run.shell,
+				args: [...ensureInteractiveShellArgs(run.shell, run.args), run.command],
+				cwd: run.cwd,
+				env: run.env,
+				timeoutMs: run.timeoutMs,
+				signal: run.signal,
+				cols: run.pty.cols,
+				rows: run.pty.rows,
+			},
+			(err, chunk) => {
+				if (!err && chunk) emit(chunk);
+			},
+		));
 	if (result.timedOut) {
 		return {
 			exitCode: undefined,
@@ -518,6 +557,25 @@ async function executeUserShellPty(run: {
 		cancelled: false,
 		...(await run.dump()),
 	};
+}
+
+/**
+ * Start the user's interactive shell in the background so the first `!` command finds it
+ * already past its rc chain. Resolves once the shell is spawning, not once it is ready.
+ * No-op where `executeBash` would not take the warm PTY path.
+ */
+export async function prewarmUserShellPty(cwd: string | undefined): Promise<void> {
+	if ($env.PI_NO_PTY === "1" || process.platform === "win32") return;
+	const settings = await Settings.init();
+	const { shell, args, env: shellEnv, prefix } = resolveUserShellConfig(settings, settings.getShellConfig());
+	if (!supportsWarmUserShell(shellBasename(shell))) return;
+	const preflight = await applyDirenvPreflight("", cwd ?? process.cwd(), {
+		timeoutMs: cfgBashDirenvLoadTimeoutMs.get(settings),
+		direnvSetting: cfgBashDirenv.get(settings),
+		commandPrefix: prefix,
+	});
+	const env = buildUserShellPtyEnv(shellEnv, buildNonInteractiveEnv(preflight.env));
+	acquireWarmUserShell(buildWarmShellSpec(shell, args, env, cwd, preflight.command));
 }
 
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
@@ -632,6 +690,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				shell,
 				args,
 				command: preflight.command,
+				scope: preflight.command.slice(0, preflight.command.length - command.length),
 				cwd: commandCwd,
 				env: buildUserShellPtyEnv(shellEnv, commandEnv),
 				pty: ptyRequest,

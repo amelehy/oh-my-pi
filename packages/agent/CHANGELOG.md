@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Qwen models (e.g. `ollama/qwen2.5-coder:7b`) printing tool calls as JSON text instead of running them: a reply that is nothing but Hermes call objects for offered tools is now converted into tool calls on every transport.
+- Fixed Qwen models (e.g. `ollama/qwen2.5-coder:7b`) printing tool calls as JSON text instead of running them: a reply that is nothing but Hermes call objects for offered tools is now converted into tool calls for Qwen models on local hosts (Ollama, llama.cpp, LM Studio, vLLM); ACP and RPC clients still see the streamed JSON text.
 
 ## [18.9.2] - 2026-10-11
 

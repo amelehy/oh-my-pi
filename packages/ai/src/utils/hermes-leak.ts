@@ -10,16 +10,32 @@
  * structured tool calls before the message is committed.
  */
 
+import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AssistantMessage, Model, ToolCall } from "../types";
+import { generateHealedToolCallId } from "./stream-markup-healing";
 import { parseToolCallArguments } from "./tool-call-arguments";
 
 const CODE_FENCE = /^```(?:json)?[ \t]*\n([\s\S]*?)\n?```$/i;
 const TOOL_CALL_OPEN = "<tool_call>";
 const TOOL_CALL_CLOSE = "</tool_call>";
 
-/** Whether Hermes leak recovery applies to `model`: Qwen-class models speak this format. */
+/** Hosts that serve Qwen through a chat template whose Hermes parser misses untagged calls. */
+const TEMPLATE_PARSER_PROVIDERS: Record<string, true> = {
+	ollama: true,
+	"llama.cpp": true,
+	"lm-studio": true,
+	vllm: true,
+};
+
+/**
+ * Whether Hermes leak recovery applies to `model`: a Qwen-class model on a local
+ * template-parsing host. Hosted APIs parse Qwen calls natively, so there a bare
+ * call object in text is a deliberate reply (e.g. "show me the JSON call") and
+ * must not be executed.
+ */
 export function isHermesLeakRecoveryTarget(model: Model): boolean {
-	return model.identity?.class === "qwen";
+	if (model.identity?.class !== "qwen") return false;
+	return model.api === "ollama-chat" || TEMPLATE_PARSER_PROVIDERS[model.provider] === true;
 }
 
 /**
@@ -56,12 +72,13 @@ function parseHermesToolCallText(
 		} catch {
 			return undefined;
 		}
-		if (!isPlainObject(parsed)) return undefined;
+		if (!isRecord(parsed)) return undefined;
 		const name = parsed.name;
 		if (typeof name !== "string" || !toolNames.has(name)) return undefined;
 		let args = parsed.arguments ?? parsed.parameters;
 		if (typeof args === "string") args = parseToolCallArguments(args);
-		if (!isPlainObject(args)) return undefined;
+		// Unparseable string arguments come back as a `__parseError` record; that is prose, not a call.
+		if (!isRecord(args) || "__parseError" in args) return undefined;
 		calls.push({ name, arguments: args });
 		index = end;
 	}
@@ -84,17 +101,13 @@ export function recoverHermesToolCallLeak(message: AssistantMessage, toolNames: 
 	if (!calls) return false;
 	const toolCalls: ToolCall[] = calls.map(call => ({
 		type: "toolCall",
-		id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+		id: generateHealedToolCallId(),
 		name: call.name,
 		arguments: call.arguments,
 	}));
 	message.content = [...message.content.filter(block => block.type !== "text"), ...toolCalls];
 	message.stopReason = "toolUse";
 	return true;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Index just past the `}` closing the object opened at `start`, or -1. */

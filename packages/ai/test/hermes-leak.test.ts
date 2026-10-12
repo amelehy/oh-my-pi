@@ -87,3 +87,12 @@ describe("recoverHermesToolCallLeak", () => {
 		expect(recoverHermesToolCallLeak(textMessage('{"name": "bash", "arguments": {}}'), new Set())).toBe(false);
 	});
 });
+
+describe("recoverHermesToolCallLeak argument handling", () => {
+	it("leaves a reply whose string arguments are not JSON as text", () => {
+		const text = '{"name": "bash", "arguments": "ls -la"}';
+		const message = textMessage(text);
+		expect(recoverHermesToolCallLeak(message, TOOLS)).toBe(false);
+		expect(message.content).toEqual([{ type: "text", text }]);
+	});
+});

@@ -308,6 +308,84 @@ describe("agentLoop with AgentMessage", () => {
 		expect(JSON.stringify(messages.at(-1))).toContain("DSML");
 	});
 
+	// Qwen on a local template host writes its Hermes call as plain text.
+	const hermesLeak = '{"name": "echo", "arguments": {"value": "hi"}}';
+
+	it("runs a Hermes call that a local Qwen model wrote as text", async () => {
+		const executions: string[] = [];
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [makeEchoTool(executions)],
+		};
+		const mock = createMockModel({
+			id: "qwen2.5-coder:7b",
+			provider: "ollama",
+			responses: [{ content: [hermesLeak] }, { content: ["Done."] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("echo hi")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executions).toEqual(["hi"]);
+		expect(mock.calls).toHaveLength(2);
+		const first = messages[1] as AssistantMessage;
+		expect(first.stopReason).toBe("toolUse");
+		expect(first.content.map(block => block.type)).toEqual(["toolCall"]);
+	});
+
+	it("leaves a bare call object untouched for a Qwen model on a hosted API", async () => {
+		const executions: string[] = [];
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [makeEchoTool(executions)],
+		};
+		const mock = createMockModel({
+			id: "qwen3-coder",
+			provider: "openrouter",
+			responses: [{ content: [hermesLeak] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("show the call")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executions).toEqual([]);
+		expect(mock.calls).toHaveLength(1);
+		expect((messages.at(-1) as AssistantMessage).content).toEqual([{ type: "text", text: hermesLeak }]);
+	});
+
+	it("does not convert a Hermes reply cut off by the length limit", async () => {
+		const executions: string[] = [];
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [makeEchoTool(executions)],
+		};
+		const mock = createMockModel({
+			id: "qwen2.5-coder:7b",
+			provider: "ollama",
+			responses: [{ content: [hermesLeak], stopReason: "length" }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		await agentLoop([createUserMessage("echo hi")], context, config, undefined, mock.stream).result();
+
+		expect(executions).toEqual([]);
+	});
+
 	it("leaves DSML in a non-DeepSeek model's prose untouched", async () => {
 		const prose = 'The literal token <｜DSML｜parameter name="x"> is part of the specification.';
 		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };

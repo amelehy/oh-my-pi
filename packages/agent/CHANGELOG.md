@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Qwen models (e.g. `ollama/qwen2.5-coder:7b`) printing tool calls as JSON text instead of running them: a reply that is nothing but Hermes call objects for offered tools is now converted into tool calls on every transport.
+
 ## [18.9.2] - 2026-10-11
 
 ### Changed

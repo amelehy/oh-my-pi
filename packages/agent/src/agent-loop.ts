@@ -53,6 +53,7 @@ import {
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi-ai/utils/dsml-leak";
+import { isHermesLeakRecoveryTarget, recoverHermesToolCallLeak } from "@oh-my-pi/pi-ai/utils/hermes-leak";
 import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
@@ -1999,6 +2000,11 @@ async function streamAssistantResponse(
 	const effectiveServiceTier = config.getServiceTier ? config.getServiceTier(model) : config.serviceTier;
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(model);
 	const dsmlLeakRecoveryEnabled = isDsmlLeakRecoveryTarget(model);
+	// In-band (owned) dialects already parse calls out of text; native tool calling only.
+	const hermesLeakToolNames =
+		!ownedDialect && isHermesLeakRecoveryTarget(model)
+			? new Set((llmContext.tools ?? []).map(tool => tool.name))
+			: undefined;
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
 	const requestSignal = harmonyAbortController
 		? signal
@@ -2239,6 +2245,16 @@ async function streamAssistantResponse(
 							removeDsmlToolMarkupLeak(finalMessage)
 						) {
 							dsmlLeakMessages.add(finalMessage);
+						}
+						// Qwen often writes its Hermes call JSON as plain text (untagged or
+						// fenced), which the host's template parser misses; turn a reply that
+						// is nothing but such calls back into structured tool calls.
+						if (
+							hermesLeakToolNames &&
+							finalMessage.stopReason === "stop" &&
+							recoverHermesToolCallLeak(finalMessage, hermesLeakToolNames)
+						) {
+							logger.debug("Recovered Hermes tool calls from assistant text", { model: model.id });
 						}
 						// Expand inline macros (and any other registered rewrite) on the
 						// finalized message before it reaches the context, the UI, or tool

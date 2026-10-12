@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `recoverHermesToolCallLeak` (`@oh-my-pi/pi-ai/utils/hermes-leak`), which converts a Qwen reply made solely of Hermes `{"name", "arguments"}` call objects (bare, `<tool_call>`-tagged, or in a bare/`json` code fence) naming offered tools into structured tool calls.
+
 ## [18.9.2] - 2026-10-11
 
 ### Breaking Changes

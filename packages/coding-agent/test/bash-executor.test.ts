@@ -12,6 +12,7 @@ import {
 	isPersistentShellCdCommand,
 } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import * as direnvModule from "@oh-my-pi/pi-coding-agent/exec/direnv";
+import { disposeWarmUserShells } from "@oh-my-pi/pi-coding-agent/exec/warm-user-shell";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 import { encodeTerminalImage } from "@oh-my-pi/pi-coding-agent/utils/terminal-graphics";
@@ -618,6 +619,104 @@ exit 64
 		} finally {
 			removeSyncWithRetries(shellDir);
 		}
+	});
+
+	describe("warm zsh user shell", () => {
+		const zshPath = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh", "/opt/homebrew/bin/zsh"].find(candidate =>
+			fs.existsSync(candidate),
+		);
+		const supported = process.platform !== "win32" && Bun.env.PI_NO_PTY !== "1" && zshPath !== undefined;
+
+		/** Runs `!`-style commands against a zsh whose rc file logs every time it is sourced. */
+		function withCountingZsh(): { shellDir: string; rcRuns: () => number; run: typeof runUserShell } {
+			const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-zsh-warm-"));
+			const counter = path.join(shellDir, "rc-runs");
+			fs.writeFileSync(
+				path.join(shellDir, ".zshrc"),
+				`echo run >> ${shellQuote(counter)}\nalias pi_warm_alias='printf warm-alias-ok'\n`,
+			);
+			cfgShellPath.set(Settings.instance, zshPath!);
+			vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+				shell: zshPath!,
+				args: ["-l", "-c"],
+				env: {
+					PATH: Bun.env.PATH ?? "",
+					HOME: shellDir,
+					ZDOTDIR: shellDir,
+					SHELL_SESSIONS_DISABLE: "1",
+				},
+				prefix: undefined,
+			});
+			const rcRuns = () => fs.readFileSync(counter, "utf8").trim().split("\n").length;
+			return { shellDir, rcRuns, run: runUserShell };
+		}
+
+		function runUserShell(
+			command: string,
+			options: { signal?: AbortSignal; timeout?: number; onChunk?: (chunk: string) => void } = {},
+		) {
+			return executeBash(command, {
+				cwd: tempDir,
+				timeout: options.timeout ?? 15000,
+				signal: options.signal,
+				useUserShell: true,
+				pty: { cols: 80, rows: 24, onChunk: options.onChunk ?? (() => {}) },
+			});
+		}
+
+		afterEach(() => {
+			disposeWarmUserShells();
+		});
+
+		it("types successive commands into one interactive shell instead of re-running the rc chain", async () => {
+			if (!supported) return;
+			const { shellDir, rcRuns, run } = withCountingZsh();
+			try {
+				const first = await run("pi_warm_alias");
+				const second = await run("export PI_WARM_STATE=kept; (exit 5)");
+				const third = await run('printf "$PI_WARM_STATE"');
+
+				// Interactive rc was loaded for the first command (alias expanded)…
+				expect(first.output).toContain("warm-alias-ok");
+				// …exit status travels back from the shell it was typed into…
+				expect(second.exitCode).toBe(5);
+				// …state persists like a real terminal, and the rc chain ran exactly once.
+				expect(third.output).toContain("kept");
+				expect(rcRuns()).toBe(1);
+				// Line-editor echo and prompt redraws stay out of the captured output.
+				expect(first.output).not.toContain("source");
+				expect(first.output).not.toContain("printf");
+			} finally {
+				removeSyncWithRetries(shellDir);
+			}
+		});
+
+		it("recovers the shell after an abort without leaking the prompt or re-running the rc chain", async () => {
+			if (!supported) return;
+			const { shellDir, rcRuns, run } = withCountingZsh();
+			try {
+				await run("true");
+				const controller = new AbortController();
+				// Abort once the command has demonstrably started, not after a guessed delay.
+				const aborted = await run("echo before-abort; sleep 30; echo after-abort", {
+					signal: controller.signal,
+					onChunk: chunk => {
+						if (chunk.includes("before-abort")) controller.abort();
+					},
+				});
+				const next = await run("echo still-warm");
+
+				expect(aborted.cancelled).toBe(true);
+				expect(aborted.output).toContain("before-abort");
+				expect(aborted.output).not.toContain("after-abort");
+				// The Ctrl-C prompt redraw and resync line are not command output.
+				expect(aborted.output).not.toContain("printf");
+				expect(next.output).toContain("still-warm");
+				expect(rcRuns()).toBe(1);
+			} finally {
+				removeSyncWithRetries(shellDir);
+			}
+		});
 	});
 
 	it("returns a real PID for background external commands", async () => {

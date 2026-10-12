@@ -83,6 +83,7 @@ import type {
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
+import { prewarmUserShellPty } from "../exec/bash-executor";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
@@ -2016,6 +2017,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!$env.PI_NO_TITLE && !this.sessionManager.getSessionName()) {
 				this.#inputController.prewarmTinyTitleModel();
 			}
+		});
+
+		// Start the user's interactive shell now so the first `!` command skips the
+		// rc chain (pyenv/nvm/compinit can cost seconds). Idle until used.
+		setImmediate(() => {
+			prewarmUserShellPty(this.sessionManager.getCwd()).catch(error => {
+				logger.debug("User shell prewarm failed", { error: String(error) });
+			});
 		});
 
 		// Host the session before extension hooks run: a dialog raised from a

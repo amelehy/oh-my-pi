@@ -12,6 +12,7 @@
 
 - The pinned `Subagents` jump list is now a live agent tree: subagents nest under the agent that spawned them, each row shows an animated status (running, done, failed, aborted), what the agent is doing right now, and its active time and spend, and the header counts each outcome with the wave's total spend and the Agent Hub key. Finished agents stay listed with their outcome while the rest of their wave runs; collapsed, the tree keeps running agents (and the agents above them) and failures first, and the expander names what it hides
 - `display.subagentLivePreview` (the per-agent activity row) is now on by default
+- `!` shell commands on zsh now run in one long-lived interactive shell that starts when omp does, instead of launching a fresh `zsh -l -i` per command: after a one-time warm-up, aliases, functions and PATH are already loaded and commands start instantly. State such as exported variables now carries between `!` commands, like a normal terminal
 
 ### Fixed
 

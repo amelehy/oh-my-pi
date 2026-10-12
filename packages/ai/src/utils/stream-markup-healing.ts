@@ -215,7 +215,7 @@ export class StreamMarkupHealing {
 	}
 }
 
-function generateHealedToolCallId(): string {
+export function generateHealedToolCallId(): string {
 	return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 

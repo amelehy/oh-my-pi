@@ -35,7 +35,7 @@ const TEMPLATE_PARSER_PROVIDERS: Record<string, true> = {
  */
 export function isHermesLeakRecoveryTarget(model: Model): boolean {
 	if (model.identity?.class !== "qwen") return false;
-	return model.api === "ollama-chat" || TEMPLATE_PARSER_PROVIDERS[model.provider] === true;
+	return TEMPLATE_PARSER_PROVIDERS[model.provider] === true;
 }
 
 /**
